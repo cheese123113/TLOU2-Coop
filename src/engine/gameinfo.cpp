@@ -64,28 +64,19 @@ namespace engine {
 		s_GameInitHook = Utility::MakeMidHook(GameInitJMP,
 			[](SafetyHookContext& ctx)
 			{
-				auto* ndgameinfo = GetNdGameInfo();
-				if (ndgameinfo) {
-					// Rollback original cfg path to game path (Like it was in T1X)
-					strcpy(ndgameinfo->m_CfgPath, ndgameinfo->m_GamePath);
-					ndgameinfo->m_DevConfig = true;
-				}
+				// Co-op build: leave the config path and dev-config flag alone. Twelve Weeks points
+				// the config at the game folder and turns dev config on, which makes the campaign
+				// read a different profile (empty Encounters list, no unlocks).
+				(void)ctx;
 
 			}, Patterns::CommonGame_GameInit.name, TO1_NAME("GameInitJMP"));
 
 		s_GameInitReturnHook = Utility::MakeMidHook(GameInitReturnJMP,
 			[](SafetyHookContext& ctx)
 			{
-				auto* ndgameinfo = GetNdGameInfo();
-				if (ndgameinfo) {
-					strcpy(ndgameinfo->m_DiscUser, PROJECT_NAME);
-					strcpy(ndgameinfo->m_StatsBuild, PROJECT_NAME);
-					ndgameinfo->m_DisableFpsStat = true; // disable on boot, but for some reason also gets rid of active task display permanently.
-
-#ifdef TO1_RELEASE
-					ndgameinfo->m_DevMode = false; // disable on boot
-#endif
-				}
+				// Co-op build: keep the player's own disc user / stats build / dev-mode values so the
+				// campaign runs on the normal profile.
+				(void)ctx;
 
 			}, Patterns::CommonGame_GameInit.name, TO1_NAME("GameInitReturnJMP"));
 
@@ -106,13 +97,8 @@ namespace engine {
 				TOSTRING(Patterns::CommonGame_NIXXES_StdHandle));
 		}
 
-		constexpr unsigned char m_DevMode_1[] = { 0xb2, 0x01, 0x90 };
-
-		s_DevModePatch = Utility::WritePatchPattern(gameModule, Patterns::NdDevMenu_GameConfig_DevMode, m_DevMode_1, sizeof(m_DevMode_1));
-
-		if (!s_DevModePatch) {
-			TO1_LOG("[gameinfo] WARNING: DevMode patch failed — dev config env may not boot.\n");
-		}
+		// Co-op build: no forced dev mode (NdDevMenu_GameConfig_DevMode patch) -- it changes how
+		// the retail game boots its config and profile.
 
 		const char* game_ver_text = "BUILD_NUMBER=";
 		uintptr_t version_number = (uintptr_t)Utility::memory::char_Scan(gameModule, game_ver_text);

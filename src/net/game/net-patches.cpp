@@ -256,20 +256,12 @@ extern "C" void NetPatch() {
     g_hkWidgetFirstChild = safetyhook::create_inline(g_base + 0x1340B10, hk_WidgetFirstChild); // untested. HUD2::Root is momentarily returning null causing the crash, this should fix it. ------ no longer needed since using NPCs as clients
     g_hkHudRootGuard = safetyhook::create_mid(g_base + 0x87E2AE, hk_HudRootGuard);
 
-    // Increase level defs (pak68.txt)
-    Utility::memory::StaticMemoryMapPatch(MemoryMapId::ALLOCATION_LEVEL_DEFS, 4608000ull + 4ull * 1024 * 1024);
-    Utility::memory::StaticMemoryMapPatch(MemoryMapId::ALLOCATION_APP_CPU_UNACCOUNTED, 7557120ull - 4ull * 1024 * 1024);
-    TO1_LOG("net-patch: Increased ALLOCATION_LEVEL_DEFS, ALLOCATION_APP_CPU_UNACCOUNTED.\n"); // for pak68.txt level defs
 
 
-    g_hkRestoreStats = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x342130), reinterpret_cast<void*>(hk_RestoreStats));
-    TO1_LOG("net-patch: Stats hook installed.\n"); // stops player from being applied data from save game
 
     // another crash fix
     g_hkDrawItem = safetyhook::create_inline(g_base + 0x129D890, hk_DrawItem);
 
-    // block save files
-    g_hkApplySaveData = safetyhook::create_inline(g_base + 0x120E7E0, hk_ApplySaveData);
 
 
     // gui2 crash fix
@@ -278,5 +270,5 @@ extern "C" void NetPatch() {
     g_hkPurecall = safetyhook::create_inline(g_base + kRvaPurecall, hk_Purecall);
     TO1_LOG("net-patch: gui2 crash fixes applied.\n");
 
-    TO1_LOG("Successfully initialised tlou-ii-mp.\n");
+    TO1_LOG("co-op patch set applied (MP-only level-def resize, stats and save blocking removed).\n");
 }

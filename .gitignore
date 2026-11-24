@@ -25,3 +25,6 @@ local-config.cmake
 re/
 defs.h
 tlou-ii.exe_nameddc.c
+out/
+build-*/
+dist/*.zip

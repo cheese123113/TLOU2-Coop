@@ -1267,6 +1267,36 @@ namespace net::hooks {
         TO1_LOG("[HOOKS] multiplayer hook set installed\n");
     }
 
+    // Co-op subset: only the puppet / engine-validity guards the remote-player puppet needs to
+    // replay animation safely. Everything that changes campaign rules (death skip, crafting
+    // page, shoulder swap, sprint override, melee/damage routing, HUD overlay) stays off, and
+    // every hook here passes straight through for anything that is not a live puppet.
+    void InstallCoopHooks()
+    {
+        if (g_installed) return;
+        g_installed = true;
+
+        g_hkCompositeMotionApply = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x1E0D600), reinterpret_cast<void*>(hk_CompositeMotionApply));
+        g_hkAnimLayerCurInst = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x1601830), reinterpret_cast<void*>(hk_AnimLayerCurInst));
+        g_dJointOob = 0;
+        g_hkJointLocator = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x1353B80), reinterpret_cast<void*>(hk_JointLocator));
+        g_hkJointEval = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x1353420), reinterpret_cast<void*>(hk_JointEval));
+
+        for (int i = 0; i < kGuardCount; ++i) g_guardHits[i] = 0;
+        g_hkUpdateRootLocator = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x1D59650), reinterpret_cast<void*>(hk_UpdateRootLocator));
+        g_hkTeleportToBoundFrame = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x1D58840), reinterpret_cast<void*>(hk_TeleportToBoundFrame));
+        g_hkNpcLegIkMode = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x6A3170), reinterpret_cast<void*>(hk_NpcLegIkMode));
+        g_hkNpcFootPlantParams = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x4FC3A0), reinterpret_cast<void*>(hk_NpcFootPlantParams));
+        g_hkApproxPathUsesTap = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x1CDE8F0), reinterpret_cast<void*>(hk_ApproxPathUsesTap));
+        g_hkCompositeBindPhysFx = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x1E078E0), reinterpret_cast<void*>(hk_CompositeBindPhysFx));
+        g_hkHandleResolve = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x15F9980), reinterpret_cast<void*>(hk_HandleResolve));
+
+        TO1_LOG("[HOOKS] co-op hook set installed: motion=%d layer=%d jointLoc=%d jointEval=%d root=%d tp=%d legIk=%d foot=%d tap=%d physFx=%d handle=%d\n",
+            g_hkCompositeMotionApply ? 1 : 0, g_hkAnimLayerCurInst ? 1 : 0, g_hkJointLocator ? 1 : 0, g_hkJointEval ? 1 : 0,
+            g_hkUpdateRootLocator ? 1 : 0, g_hkTeleportToBoundFrame ? 1 : 0, g_hkNpcLegIkMode ? 1 : 0, g_hkNpcFootPlantParams ? 1 : 0,
+            g_hkApproxPathUsesTap ? 1 : 0, g_hkCompositeBindPhysFx ? 1 : 0, g_hkHandleResolve ? 1 : 0);
+    }
+
     void RemoveMultiplayerHooks()
     {
         if (!g_installed) return;

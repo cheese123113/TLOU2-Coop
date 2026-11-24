@@ -1,48 +1,75 @@
-# winmm: client source
+# TLOU2 Campaign Co-op (work in progress)
 
-This folder holds the C++ source of the multiplayer client for The Last of Us Part II Remastered on PC.
-It builds as `winmm.dll`. The game loads that file as its winmm proxy, and the same file also holds the mod code.
+A campaign co-op mod for **The Last of Us Part II Remastered** (PC), built on the client source of
+[Twelve Weeks](https://github.com/kelliex3/Twelve-Weeks) by Kellie and contributors (GPL-3.0). The
+networking, remote-player puppets and animation replication are theirs; this fork strips the
+multiplayer mode out and points that machinery at the single-player campaign.
 
-## How the shipped winmm.dll is made
+Unofficial fan project, not affiliated with Sony Interactive Entertainment or Naughty Dog. You need
+your own copy of the game.
 
-Twelve Weeks does **not** build its `winmm.dll` from this folder. The release build:
+## Status: milestone 1
 
-1. starts from a fixed prebuilt binary (`tools/local/winmm-nocave-127.0.0.1-7001.dll`);
-2. applies byte patches at fixed offsets (`tools/features/winmm_patches.py`, applied by `tools/features/build_dll.py`);
-3. adds the `t2r-ext.dll` loader and the data caves, and sets the server address (`tools/features/patch_winmm.py`).
+| Milestone | What | State |
+|---|---|---|
+| M1 | Both players load the same chapter; each sees the other as an NPC puppet (position, animation, held weapon) | in progress |
+| M2 | Shared combat: host-owned enemies mirrored to the client, client hits sent to the host | planned |
+| M3 | Shared progress: chapter / checkpoint sync, partner pulled along through cutscenes, doors and pickups | planned |
+| M4 | Downed / revive, join menu, partner camera during cutscenes | planned |
 
-All these patches use fixed offsets. A `winmm.dll` rebuilt from this folder has different offsets, so the patches
-do not fit it. Use this folder to read how the client works and to port changes. New features go in `tools/ext/`.
+In M1 enemies, pickups and story progress are still local to each player.
 
-To install the prebuilt binary, see `tools/fetch_base_dll.py` and [CONTRIBUTING.md](../CONTRIBUTING.md).
+## Playing (M1 test builds)
 
-## What is not here
+1. Close the game, then run `install.ps1` (moves an existing `winmm.dll`, e.g. Twelve Weeks', into
+   `tlou2-coop-backup\` first). `uninstall.ps1` puts it back.
+2. Start the game from Steam (not the Twelve Weeks launcher, which reinstalls its own `winmm.dll`).
+3. Both players are Steam friends and load the **same chapter / checkpoint**.
+4. The host presses **F7**.
+5. The friend presses **F8**: the mod finds the Steam friend who is hosting and joins them. No IP
+   addresses, no port forwarding and no extra programs: it uses Steam's own peer-to-peer networking
+   (direct connection or a Valve relay), through the game's own Steam library.
+6. **F6** leaves. **F9** writes a spawner / look discovery dump to the log. **F10** spawns a test copy
+   of yourself.
 
-- `psarc/`, `widgets/`, `music/`: data taken from the game (archive contents, UI widgets, menu music).
-- Decompiler output and `local-config.cmake` (machine-local).
+LAN without Steam: set `join_ip` in `tlou2-coop.ini` to the host's IP; F8 then joins that IP on
+UDP 7777 instead.
 
-The archive keystream key, nonce and verify key in `CMakeLists.txt` are zero. Set your own with
-`-DTO1_PSARC_KEY=... -DTO1_PSARC_NONCE=... -DTO1_VERIFY_KEY=...`.
+Everything the mod does is logged to `tlou2-coop.log` next to `tlou-ii.exe`.
+
+### tlou2-coop.ini
+
+```ini
+name=Player          ; shown to your partner; Player = your Steam name
+look=auto            ; how your partner sees you; auto = your current campaign character
+join_ip=             ; empty = F8 joins a Steam friend; an IP = LAN join on UDP 7777
+spawner=             ; optional: NPC spawner names to borrow for the partner puppet
+overlay=1            ; status line in the top-left corner
+```
 
 ## Building
 
-Requirements:
+Needs CMake 3.25+, Ninja, LLVM (clang-cl, lld-link, llvm-ml64) and an installed MSVC + Windows SDK.
 
-- Windows, CMake 3.25 or later, Python 3.
-- Visual Studio 2022 or 2026 with the "C++ Clang tools for Windows" component. Or an LLVM toolchain on PATH:
-  `clang-cl`, `lld-link`, `llvm-rc`, `llvm-ml`, `llvm-lib`, `llvm-strip`.
-- `gui2.exe` (widget baker) and `ndarc.exe` (archive packer) on PATH.
-- Your own `psarc/` and `widgets/` folders next to `CMakeLists.txt`. The configure step stops when they are empty.
-
-Steps:
-
-1. Copy `local-config.cmake.example` to `local-config.cmake` and set your game folders.
-2. Configure and build:
-
-```bat
-cmake --preset ninja-release
-cmake --build --preset ninja-release
+```powershell
+cmake --preset ninja-debug
+cmake --build --preset ninja-debug
+.\install.ps1
 ```
 
-Or use the Visual Studio presets (`vs2022`, `to1-release`). `TO1Debug` adds logging and the NET debug menu (F1).
-The build fetches safetyhook (with Zydis) from GitHub.
+`local-config.cmake` (gitignored) must set `TO1_GAME_INSTALLS`; the post-build copy goes there.
+Unlike Twelve Weeks, no `psarc/`, `widgets/`, `gui2.exe` or `ndarc.exe` is needed: the co-op build
+embeds no game data.
+
+## What changed from the Twelve Weeks client
+
+- No embedded archive, mod-menu level, matchmaking, relay, tamper reports or hardware id.
+- Saves and player stats load normally (Twelve Weeks blocks them for its MP mode).
+- `src/coop/`: host/join hotkeys, config, status overlay, and borrowing an NPC spawner from the
+  loaded campaign level for the partner puppet (the MP client spawner only exists in Twelve Weeks' maps).
+- `NetTick` runs only the session plus `net::replication::CoopTick` (puppet replication, no PvP rules).
+- `net::hooks::InstallCoopHooks`: the puppet / engine-validity guards only.
+
+## License
+
+GPL-3.0, same as Twelve Weeks. See [LICENSE](LICENSE).

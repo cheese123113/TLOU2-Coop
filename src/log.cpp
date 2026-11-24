@@ -1,7 +1,5 @@
 #include "log.hpp"
 
-#ifdef TO1_DEBUG
-
 #include <Windows.h>
 #include <share.h>
 #include <cstdarg>
@@ -25,7 +23,7 @@ namespace to1log {
 				if (*p == '\\' || *p == '/') slash = p;
 			if (!slash) return;
 			slash[1] = 0;
-			strcat_s(path, "tlou-ii-mp.log");
+			strcat_s(path, "tlou2-coop.log");
 			s_file = _fsopen(path, "w", _SH_DENYWR);
 		}
 	}
@@ -60,5 +58,3 @@ namespace to1log {
 		}
 	}
 }
-
-#endif

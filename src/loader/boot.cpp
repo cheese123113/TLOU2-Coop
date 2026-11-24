@@ -4,7 +4,6 @@
 #include "engine/patterns.hpp"
 #include "engine/memory.hpp"
 #include "engine/gameinfo.hpp"
-#include "engine/archive.hpp"
 #include "engine/script.hpp"
 #include "engine/draw.hpp"
 #include "engine/debugdraw.hpp"
@@ -12,7 +11,6 @@
 #include "sid/sidbase.hpp"
 #include "menu/net-menu.hpp"
 #include "gameplay/barrel-check.hpp"
-#include "hwid.hpp"
 #include "log.hpp"
 
 #include <safetyhook.hpp>
@@ -102,15 +100,14 @@ namespace boot {
 	}
 
 	static bool ApplyBootPatches(HMODULE module) {
-		static const unsigned char kTestTasksTrue[] = { 0x40, 0xB6, 0x01 };
-		auto testTasks = Utility::WritePatchPattern(module, Patterns::TestTasksMenu, kTestTasksTrue, sizeof(kTestTasksTrue));
-
+		// Co-op build: no "test tasks" patch -- it swaps the retail task list (chapters /
+		// encounters) for the debug one. Only the level-def debug break is still removed.
 		static const unsigned char kNop6[] = { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 };
 		auto levelDef = Utility::WritePatchPattern(module, Patterns::LevelDefDebugBreak, kNop6, sizeof(kNop6));
 
 		if (!levelDef)
 			TO1_LOG("[boot] WARNING: failed to patch pLevelDef debug break.\n");
-		return testTasks && levelDef;
+		return static_cast<bool>(levelDef);
 	}
 
 	static safetyhook::MidHook gFrameHook;
@@ -123,7 +120,7 @@ namespace boot {
 #ifdef TO1_DEBUG
 		engine::debugdraw::Tick();
 #endif
-		gameplay::barrelcheck::Tick();
+		// co-op: barrel-check (MP explosive-barrel helper) is not ticked
 
 		static bool initialized = false;
 		if (!initialized) {
@@ -132,16 +129,8 @@ namespace boot {
 			gSkelType2Hook = safetyhook::create_inline(
 				(void*)DcManager::SkeletonOverrideAddr2, (void*)hk_IsCharacterType2);
 
-			DC::Call<"load-level">(MEMORY::ALLOC_STRING("starlight-mod-menu"));
-
-			hwid::Get();
-
-#ifdef TO1_DEBUG
-			if (TO1_DEV_LOADDEVLEVEL)
-			{
-				DEBUG::PLAY_TASK(SID("starlight-levels"), SID("starlight-main-menu"), 0);
-			}
-#endif
+			// Co-op build: no mod menu level and no hardware id -- the campaign boots as normal.
+			TO1_LOG("[boot] first frame, co-op tick running\n");
 
 			initialized = true;
 		}
@@ -154,11 +143,6 @@ namespace boot {
 
 		if (!engine::InitGameInfo(gameModule)) {
 			TO1_LOG("[boot] FATAL: game-info init failed.\n");
-			return false;
-		}
-
-		if (!engine::archive::Init(gameModule, selfModule)) {
-			TO1_LOG("[boot] FATAL: embedded psarc init failed.\n");
 			return false;
 		}
 

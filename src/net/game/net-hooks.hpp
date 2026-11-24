@@ -5,6 +5,7 @@
 namespace net::hooks {
 
 	void InstallMultiplayerHooks();
+	void InstallCoopHooks();        // co-op: puppet guards only (removed by RemoveMultiplayerHooks)
 	void RemoveMultiplayerHooks();
 
 	void ReportWithheldMeleeKill(int netSlot, uint64_t weapon, float damage);

@@ -23,6 +23,8 @@
 #include <gameplay/perks/perk-registry.hpp>
 #include <gameplay/loadout/purchase.hpp>
 #include <gameplay/melee.hpp>
+#include "coop/coop.hpp"
+#include "coop/enemysync.hpp"
 
 namespace net::replication {
 
@@ -853,6 +855,31 @@ namespace net::replication {
 
         if (st.weaponId != 0)
             net::engine::AttachWeaponToCorrectHand(p.Ptr(), st.weaponId, st.aimSideLeft != 0);
+    }
+
+    // Co-op frame: just the remote-puppet half of Tick() -- spawn the partner once their state
+    // arrives, replay position/animation/weapon onto it, and let a dead puppet run its death
+    // ladder. None of the PvP layer (lives, respawn timers, spectate, kill feed, perks, HUD
+    // widgets, supply boxes, AlwaysRun's forced difficulty / pause-menu lock) runs here.
+    void CoopTick(float dt)
+    {
+        for (NetPlayer& p : NetPlayers::Remotes()) {
+            NetSetSlotStreamAlive(p.netSlot,
+                p.spawned && p.hasState && !p.animDetached &&
+                (NowSec() - p.lastPacketTime) < kAliveStaleSeconds);
+
+            if (!p.spawned && p.hasState && !p.dead && coop::CanSpawnPartner()) {
+                AutoSpawnRemote(p);
+                coop::OnPartnerSpawnAttempt(p.spawned);
+            }
+
+            if (p.dead) { p.TickDeath(); continue; }
+            if (p.spawned && p.Exists())
+                ApplyRemote(p, dt);
+        }
+
+        net::engine::ApplyWeaponSkeleton(NetPlayers::LocalPtr());
+        coop::enemies::Tick(dt);
     }
 
     static void UpdateTeamHighlight()
@@ -1852,6 +1879,10 @@ namespace net::replication {
             sender.RecordPing(static_cast<uint32_t>(rttMs));
             break;
         }
+
+        case NEVT_COOP_ENEMY:
+            coop::enemies::OnEvent(senderSlot, data, size);
+            break;
 
         default:
             break;

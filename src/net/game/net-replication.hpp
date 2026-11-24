@@ -37,5 +37,6 @@ namespace net::replication {
     void AwardParts(int partsAmount, int slot, std::string reason);
 
     void ResetRuntime();
+    void CoopTick(float dt);     // co-op: remote-puppet replication only
 
 }

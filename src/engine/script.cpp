@@ -3,6 +3,7 @@
 #include "loader/config.hpp"
 #include "sid/sidbase.hpp"
 #include "log.hpp"
+#include "coop/coop.hpp"   // coop::Notify -- SHOW_NOTIFICATION target
 
 #include <bit>
 #include <cmath>
@@ -715,12 +716,14 @@ namespace HUD
         DC::Call<"fade-to-black">(timeToFade, blackHold, 0, 0);
     }
 
+    // Co-op build: Twelve Weeks writes the message into the text of CUSTOM_CIPHER_MESSAGE, an
+    // entry only its modified text archives provide. In the retail game that text is read-only
+    // (writing it crashed the game), so notifications go to the co-op status line instead.
     void SHOW_NOTIFICATION(const char* message, float durationSeconds, int messageType, StringId64 customCipherId)
     {
-        char* cipherText = DC::Call<"cipher-get-text", char>(customCipherId);
-        std::strcpy(cipherText, message);
-
-        DC::Call<"hud-show-cipher-message">(messageType, customCipherId, durationSeconds, 2, SID("none"), 0.5f);
+        (void)durationSeconds; (void)messageType; (void)customCipherId;
+        TO1_LOG("[notify] %s\n", message ? message : "");
+        coop::Notify(message);
     }
 
     void SHOW_NOTIFICATION_CIPHER(StringId64 cipherId, float durationSeconds, int messageType)

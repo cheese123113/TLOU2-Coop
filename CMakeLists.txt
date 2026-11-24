@@ -25,7 +25,7 @@ foreach(kind EXE SHARED MODULE)
     set(CMAKE_${kind}_LINKER_FLAGS_INIT "${CMAKE_${kind}_LINKER_FLAGS_INIT} /MANIFEST:NO")
 endforeach()
 
-project(tlou-ii-mp VERSION 1.3.0 LANGUAGES C CXX RC)
+project(tlou2-coop VERSION 0.1.0 LANGUAGES C CXX RC)
 
 if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     message(FATAL_ERROR
@@ -86,24 +86,6 @@ if(TARGET safetyhook)
     target_compile_options(safetyhook PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/GR->)
 endif()
 
-find_program(TO1_GUI2_CLI NAMES gui2 gui2.exe DOC "Naughty Dog GUI2 CLI (gui2.exe)")
-find_program(TO1_NDARC    NAMES ndarc ndarc.exe DOC "psarc packer (ndarc.exe)")
-if(NOT TO1_GUI2_CLI)
-    message(FATAL_ERROR "gui2 CLI not found. Put gui2.exe on PATH, or set TO1_GUI2_CLI in local-config.cmake.")
-endif()
-if(NOT TO1_NDARC)
-    message(FATAL_ERROR "ndarc not found. Put ndarc.exe on PATH or set TO1_NDARC in local-config.cmake.")
-endif()
-
-foreach(tool TO1_GUI2_CLI TO1_NDARC)
-    if(NOT EXISTS "${${tool}}")
-        message(FATAL_ERROR
-            "${tool} is set to [${${tool}}] but there is no such file. "
-            "Fix the path (local-config.cmake / -D${tool}=...), or clear it and let "
-            "CMake find the tool on PATH:  cmake -U${tool} -B <builddir>")
-    endif()
-endforeach()
-
 get_filename_component(TO1_LLVM_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
 find_program(TO1_LLVM_STRIP
     NAMES llvm-strip strip
@@ -121,78 +103,6 @@ if(TO1_STRIP_ASI AND NOT TO1_LLVM_STRIP)
 endif()
 
 set(TO1_DATA_DIR    "${CMAKE_BINARY_DIR}/data")
-set(TO1_GUI2_PAK    "${TO1_DATA_DIR}/gui2-widgets.pak")
-set(TO1_PSARC_STAGE "${TO1_DATA_DIR}/psarc-stage")
-set(TO1_PSARC       "${TO1_DATA_DIR}/tlou-ii-mp.psarc")
-set(TO1_PSARC_ENC   "${TO1_DATA_DIR}/tlou-ii-mp.psarc.enc")
-set(TO1_PSARC_RC    "${TO1_DATA_DIR}/embedded-psarc.rc")
-set(TO1_RES_PSARC_ID 1001)
-
-
-set(TO1_PSARC_KEY   "0x0000000000000000" CACHE STRING "psarc keystream key (64-bit hex)")
-set(TO1_PSARC_NONCE "0x0000000000000000" CACHE STRING "psarc keystream nonce (64-bit hex)")
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
-
-set(TO1_VERIFY_KEY "0x0000000000000000" CACHE STRING "psarc sample-offset key (64-bit hex)")
-set(TO1_VERIFY_FULL_MAX_MB "128" CACHE STRING
-    "Game psarcs up to this many MB are hashed in full at load (bin.psarc, which holds the gameplay dc1 data, is ~77 MB); larger ones fall back to index + sampled payload.")
-set(TO1_GAME_DATA_DIR "" CACHE PATH
-    "Reference game data dir (…/build/pc/main) whose psarcs get fingerprinted. Empty disables game-archive verification.")
-if(NOT TO1_GAME_DATA_DIR)
-    list(GET TO1_INSTALLS 0 TO1_FIRST_INSTALL)
-    set(TO1_GAME_DATA_DIR "${TO1_FIRST_INSTALL}/build/pc/main" CACHE PATH "" FORCE)
-endif()
-message(STATUS "Game psarc verification: fingerprinting ${TO1_GAME_DATA_DIR}")
-file(GLOB_RECURSE TO1_GAME_PSARCS CONFIGURE_DEPENDS "${TO1_GAME_DATA_DIR}/*.psarc")
-
-set(TO1_PSARC_MANIFEST "${CMAKE_BINARY_DIR}/generated/game-psarc-manifest.inc")
-add_custom_command(OUTPUT "${TO1_PSARC_MANIFEST}"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/generated"
-    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/gen-psarc-manifest.py"
-            "${TO1_GAME_DATA_DIR}" "${TO1_PSARC_MANIFEST}" "${TO1_VERIFY_KEY}" "${TO1_VERIFY_FULL_MAX_MB}"
-    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/gen-psarc-manifest.py" ${TO1_GAME_PSARCS}
-    COMMENT "fingerprint: game psarcs -> game-psarc-manifest.inc"
-    VERBATIM)
-
-file(GLOB_RECURSE TO1_WIDGET_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/widgets/*.widget.json")
-file(GLOB_RECURSE TO1_PSARC_SOURCES  CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/psarc/*")
-if(NOT TO1_WIDGET_SOURCES)
-    message(FATAL_ERROR "widgets/ contains no *.widget.json -- the gui2 pak would be empty.")
-endif()
-if(NOT TO1_PSARC_SOURCES)
-    message(FATAL_ERROR "psarc/ is empty -- nothing to pack.")
-endif()
-
-add_custom_command(OUTPUT "${TO1_GUI2_PAK}"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${TO1_DATA_DIR}"
-    COMMAND "${TO1_GUI2_CLI}" build "${CMAKE_CURRENT_SOURCE_DIR}/widgets" "${TO1_GUI2_PAK}" --t2r
-    DEPENDS ${TO1_WIDGET_SOURCES}
-    COMMENT "gui2: baking widgets/ -> gui2-widgets.pak"
-    VERBATIM)
-
-add_custom_command(OUTPUT "${TO1_PSARC}"
-    COMMAND ${CMAKE_COMMAND} -E rm -rf "${TO1_PSARC_STAGE}"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/psarc" "${TO1_PSARC_STAGE}"
-    COMMAND ${CMAKE_COMMAND} -E copy "${TO1_GUI2_PAK}" "${TO1_PSARC_STAGE}/actor97/gui2-widgets.pak"
-    COMMAND "${TO1_NDARC}" -c "${TO1_PSARC_STAGE}" -o "${TO1_PSARC}"
-    DEPENDS "${TO1_GUI2_PAK}" ${TO1_PSARC_SOURCES}
-    COMMENT "ndarc: packing psarc/ + gui2-widgets.pak -> tlou-ii-mp.psarc"
-    VERBATIM)
-
-add_custom_command(OUTPUT "${TO1_PSARC_ENC}"
-    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/encrypt-resource.py"
-            "${TO1_PSARC}" "${TO1_PSARC_ENC}" "${TO1_PSARC_KEY}" "${TO1_PSARC_NONCE}"
-    DEPENDS "${TO1_PSARC}" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/encrypt-resource.py"
-    COMMENT "obfuscate: tlou-ii-mp.psarc -> tlou-ii-mp.psarc.enc"
-    VERBATIM)
-
-file(CONFIGURE OUTPUT "${TO1_PSARC_RC}"
-    CONTENT "${TO1_RES_PSARC_ID} RCDATA \"${TO1_PSARC_ENC}\"\n"
-    @ONLY)
-set_source_files_properties("${TO1_PSARC_RC}" PROPERTIES
-    GENERATED TRUE
-    OBJECT_DEPENDS "${TO1_PSARC_ENC}")
-
 if(NOT CMAKE_ASM_MASM_COMPILER)
     get_filename_component(TO1_LLVM_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
     find_program(CMAKE_ASM_MASM_COMPILER NAMES llvm-ml64 llvm-ml ml64
@@ -219,14 +129,12 @@ source_group("loader" FILES "${TO1_WINMM_ASM}")
 file(GLOB_RECURSE MOD_SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.c)
 file(GLOB_RECURSE MOD_HEADERS CONFIGURE_DEPENDS src/*.hpp src/*.h)
 
-add_library(tlou-ii-mp SHARED ${MOD_SOURCES} ${MOD_HEADERS} "${TO1_PSARC_RC}" "${TO1_PSARC_MANIFEST}"
+add_library(tlou-ii-mp SHARED ${MOD_SOURCES} ${MOD_HEADERS}
     "${TO1_WINMM_DEF}" "${TO1_WINMM_INC}")
-set_source_files_properties("${TO1_PSARC_MANIFEST}" PROPERTIES GENERATED TRUE HEADER_FILE_ONLY TRUE)
 set_source_files_properties("${TO1_WINMM_INC}" PROPERTIES HEADER_FILE_ONLY TRUE)
 
 
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${MOD_SOURCES} ${MOD_HEADERS})
-source_group("data" FILES "${TO1_PSARC_RC}")
 source_group("loader" FILES "${TO1_WINMM_DEF}" "${TO1_WINMM_INC}")
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT tlou-ii-mp)
@@ -243,10 +151,6 @@ target_include_directories(tlou-ii-mp PRIVATE
 
 target_compile_definitions(tlou-ii-mp PRIVATE
     _CRT_SECURE_NO_WARNINGS
-    TO1_RES_PSARC_ID=${TO1_RES_PSARC_ID}
-    TO1_PSARC_KEY=${TO1_PSARC_KEY}ull
-    TO1_PSARC_NONCE=${TO1_PSARC_NONCE}ull
-    TO1_VERIFY_KEY=${TO1_VERIFY_KEY}ull
     $<$<CONFIG:TO1Debug>:TO1_DEBUG>
     $<$<CONFIG:TO1Release>:TO1_RELEASE>)
 

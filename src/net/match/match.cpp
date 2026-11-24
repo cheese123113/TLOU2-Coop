@@ -12,6 +12,7 @@
 #include "menu/net-menu.hpp"
 #include "kill-feed.hpp"
 #include "net-debug.hpp"
+#include "coop/coop.hpp"
 
 bool multiplayer = false;
 
@@ -172,14 +173,13 @@ namespace net::match {
 
 }
 
+// Co-op driver. The PvP layer (menus, matchmaking, relay ping, tamper reports, match
+// authority, scoreboard) is not ticked at all: coop::Tick handles host/join, and once a
+// partner is connected only the puppet replication runs.
 void NetTick()
 {
     NetAnimTickEarly();
-    net::gui2::UpdateMenu();
-    net::relayping::Tick();
-    net::matchmaking::Tick();
-    net::tamper::Tick();
-    net::match::Get().TickRelayHandoff();
+    coop::Tick();
 
     if (!multiplayer || !net::session::IsRunning())
         return;
@@ -189,10 +189,8 @@ void NetTick()
     if (!net::session::IsConnected())
         return;
 
-    net::replication::TickMatchAuthority(TIME::GET_DELTA_TIME());
-
     if (!ENTITY::DOES_EXIST(SID("player")))
         return;
 
-    net::replication::Tick();
+    net::replication::CoopTick(TIME::GET_DELTA_TIME());
 }

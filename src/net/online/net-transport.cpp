@@ -1,6 +1,7 @@
 #include "net-transport.hpp"
 #include "net-debug.hpp"
 #include "relay-protocol.h"
+#include "net-steam.hpp"
 #include <windows.h>
 #include <cstdio>
 #include <cstring>
@@ -38,6 +39,59 @@ namespace net::transport {
     static const int      kRelayMaxPayload = RELAY_MAX_PAYLOAD;
     static const uint32_t kVirtBase = 0xFF000000u;
     static const uint16_t kVirtPort = 1;
+
+    // ---- Steam peers (co-op) ------------------------------------------------------------
+    // A Steam friend is addressed by a virtual IPv4 address 254.0.0.N (port 2) that indexes this
+    // table, so the session code keeps working with sockaddr_in. Packets to such an address go
+    // through ISteamNetworkingMessages channel 0; everything else still uses the UDP socket.
+    static bool        g_steamOn = false;
+    static uint64_t    g_steamPeers[16] = {};
+    static const uint32_t kSteamVirtBase = 0xFE000000u;
+    static const uint16_t kSteamVirtPort = 2;
+
+    static sockaddr_in SteamAddrForIndex(int i)
+    {
+        sockaddr_in a{};
+        a.sin_family = AF_INET;
+        a.sin_addr.s_addr = htonl(kSteamVirtBase | static_cast<uint32_t>(i));
+        a.sin_port = htons(kSteamVirtPort);
+        return a;
+    }
+
+    static int SteamIndexForAddr(const sockaddr_in& a)
+    {
+        const uint32_t h = ntohl(a.sin_addr.s_addr);
+        if ((h & 0xFFFFFF00u) != kSteamVirtBase || ntohs(a.sin_port) != kSteamVirtPort) return -1;
+        const int i = static_cast<int>(h & 0xFF);
+        return (i < 16 && g_steamPeers[i]) ? i : -1;
+    }
+
+    bool EnableSteam()
+    {
+        if (!net::steam::Available()) return false;
+        g_steamOn = true;
+        return true;
+    }
+
+    bool SteamOn() { return g_steamOn; }
+
+    sockaddr_in SteamPeerAddr(uint64_t steamId)
+    {
+        int freeSlot = -1;
+        for (int i = 0; i < 16; ++i) {
+            if (g_steamPeers[i] == steamId) return SteamAddrForIndex(i);
+            if (!g_steamPeers[i] && freeSlot < 0) freeSlot = i;
+        }
+        if (freeSlot < 0) freeSlot = 15;
+        g_steamPeers[freeSlot] = steamId;
+        return SteamAddrForIndex(freeSlot);
+    }
+
+    uint64_t SteamIdForAddr(const sockaddr_in& a)
+    {
+        const int i = SteamIndexForAddr(a);
+        return i < 0 ? 0 : g_steamPeers[i];
+    }
 
     static sockaddr_in VirtualAddrForSlot(uint8_t slot)
     {
@@ -155,11 +209,15 @@ namespace net::transport {
             closesocket(g_sock);
             g_sock = INVALID_SOCKET;
         }
+        if (g_steamOn) {
+            for (uint64_t& id : g_steamPeers) { if (id) net::steam::Close(id); id = 0; }
+            g_steamOn = false;
+        }
         g_relayMode = false;
         g_relayRegistered = false;
     }
 
-    bool IsOpen() { return g_sock != INVALID_SOCKET; }
+    bool IsOpen() { return g_sock != INVALID_SOCKET || g_steamOn; }
 
     bool IsRelay() { return g_relayMode; }
 
@@ -174,6 +232,10 @@ namespace net::transport {
 
     int Send(const sockaddr_in& to, const void* data, int len)
     {
+        if (g_steamOn) {
+            const int i = SteamIndexForAddr(to);
+            if (i >= 0) return net::steam::Send(g_steamPeers[i], data, len, net::steam::kChannelGame) ? len : -1;
+        }
         if (g_sock == INVALID_SOCKET) return -1;
 
         if (g_relayMode) {
@@ -208,6 +270,14 @@ namespace net::transport {
 
     int Recv(void* buf, int cap, sockaddr_in* from)
     {
+        if (g_steamOn) {
+            uint64_t id = 0;
+            const int n = net::steam::Recv(net::steam::kChannelGame, buf, cap, &id);
+            if (n >= 0 && id) {
+                if (from) *from = SteamPeerAddr(id);
+                return n;
+            }
+        }
         if (g_sock == INVALID_SOCKET) return -1;
 
         if (g_relayMode) {

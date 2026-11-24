@@ -31,4 +31,10 @@ namespace net::transport {
 	bool SameAddr(const sockaddr_in& a, const sockaddr_in& b);
 	bool MakeAddr(const char* ip, uint16_t port, sockaddr_in* out); // false = bad IP
 
+	// Co-op: Steam peer-to-peer alongside (or instead of) the UDP socket.
+	bool        EnableSteam();                          // false when Steam is unavailable
+	bool        SteamOn();
+	sockaddr_in SteamPeerAddr(uint64_t steamId);        // virtual address for a Steam user
+	uint64_t    SteamIdForAddr(const sockaddr_in& a);   // 0 when not a Steam address
+
 }

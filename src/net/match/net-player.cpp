@@ -10,6 +10,7 @@
 #include "net-debug.hpp"
 #include "net-replication.hpp"
 #include "net-common.hpp"
+#include "coop/coop.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -95,7 +96,7 @@ bool NetPlayer::PushState(const PlayerNetState& s, uint32_t sequence, float now)
     return true;
 }
 
-static void ResolveLoadout(int slot, StringId64& primary, StringId64& secondary)
+[[maybe_unused]] static void ResolveLoadout(int slot, StringId64& primary, StringId64& secondary)
 {
     primary = 0;
     secondary = SID("pistol-beretta");
@@ -528,9 +529,10 @@ void NetPlayer::Spawn(Vector3 position, Quaternion rotation)
     }
     EnsureInit();
 
-    StringId64 npc = DC::Call<"spawn-entity-at-with-look">(SID("starlight-mp-client-1"), // spawner with multispawn
-        LOCATOR::GET_SPAWNER_LOCATOR(SID("to1-spawn-point-1")),
-        SID(LookOrDefault()));
+    // Co-op: campaign levels have no MP client spawner, so coop::SpawnPartnerNpc borrows an
+    // NPC spawner from the loaded level (multispawn forced on for the one call) and spawns the
+    // partner's look straight at their reported position.
+    StringId64 npc = coop::SpawnPartnerNpc(position, rotation, LookOrDefault());
     if (!npc) {
         TO1_LOG("[NetPlayer] slot %d: NPC spawn failed\n", netSlot);
         return;
@@ -566,16 +568,17 @@ void NetPlayer::Spawn(Vector3 position, Quaternion rotation)
             np ? *reinterpret_cast<void**>(np + 0x898) : nullptr,
             (np && (*reinterpret_cast<uint8_t*>(np + 0x9FD) & 1)) ? 1 : 0);
 
-    NPC::SET_FACTION_ID(npc, Faction::NetTeam2);
+    NPC::SET_FACTION_ID(npc, Faction::Buddy);   // co-op: on the player's side
 
     InvalidatePathfindHandle(Ptr());
 
         net::hooks::PuppetTeleportScope allow;   // ours, not the engine's fall watchdog
         DC::Call<"npc-teleport-to">(npc, MEMORY::ALLOC_BOUND_FRAME(position, rotation));
 
-    StringId64 primary, secondary;
-    ResolveLoadout(netSlot, primary, secondary);
-    const StringId64 spawnWeapon = primary ? primary : secondary;
+    // Co-op: no MP loadouts -- the puppet starts with whatever the partner reports holding
+    // (ApplyRemote keeps it in step afterwards).
+    const StringId64 spawnWeapon = hasState ? State().weaponId : 0;
+    puppetWeapon = spawnWeapon;
     if (spawnWeapon) {
         DC::Call<"npc-give-weapon">(npc, spawnWeapon, 999, 0x1);
         net::engine::AttachWeaponToCorrectHand(Ptr(), spawnWeapon);
@@ -1102,6 +1105,12 @@ namespace NetPlayers {
 
     void RespawnLocal(Vector3 position, Quaternion rotation)
     {
+        // Co-op: the MP model-changer spawner only exists in Twelve Weeks' maps; writing into a
+        // null spawner would crash. The campaign handles the player's own death and respawn.
+        if (!ENTITY::GET_SPAWNER("starlight-model-changer")) {
+            TO1_LOG("[NetPlayer] RespawnLocal ignored: no MP model-changer spawner in the campaign\n");
+            return;
+        }
         const char* look = Local() ? Local()->LookOrDefault() : DefaultLook(0);
         SetupModelChangerSpawner(position, rotation, look);
 

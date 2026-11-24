@@ -696,16 +696,14 @@ namespace net::session {
     {
         LeaveInternal(true);
 
-        if (!transport::Open(kNetDefaultPort)) {
-            int err = transport::LastError();
-            if (err == WSAEADDRINUSE) {
-                HUD::SHOW_NOTIFICATION("Port 7777 already in use!", 5.0f);
-            }
-            else {
-                char msg[64];
-                sprintf_s(msg, "Bind failed (error %d)", err);
-                HUD::SHOW_NOTIFICATION(msg, 5.0f);
-            }
+        // Co-op: host on UDP 7777 (LAN / direct IP) AND Steam peer-to-peer (friends, no port
+        // forwarding). Either one is enough.
+        const bool udpOk = transport::Open(kNetDefaultPort);
+        if (!udpOk)
+            TO1_LOG("[NET] UDP 7777 unavailable (error %d) -- hosting over Steam only\n", transport::LastError());
+        const bool steamOk = transport::EnableSteam();
+        if (!udpOk && !steamOk) {
+            HUD::SHOW_NOTIFICATION("Could not host: no UDP port and no Steam", 5.0f);
             return;
         }
 
@@ -721,7 +719,7 @@ namespace net::session {
         NetPlayers::Reset();
         NetPlayers::SetupLocal(0, LocalName(), g_localLook);
 
-        TO1_LOG("[NET] HOST READY on port %u\n", kNetDefaultPort);
+        TO1_LOG("[NET] HOST READY (udp %u: %s, steam: %s)\n", kNetDefaultPort, udpOk ? "yes" : "no", steamOk ? "yes" : "no");
         HUD::SHOW_NOTIFICATION("Hosting on port 7777 - waiting for players...", 5.0f);
     }
 
@@ -767,6 +765,42 @@ namespace net::session {
         TO1_LOG("[NET] CLIENT connecting to %s:%u\n", hostIP, kNetDefaultPort);
         SendHello();
         HUD::SHOW_NOTIFICATION("Connecting to host...", 5.0f);
+    }
+
+    // Co-op: join a Steam friend who is hosting. Same handshake as JoinGame, but the host's
+    // address is the Steam virtual address of their Steam ID.
+    void JoinGameSteam(uint64_t hostSteamId)
+    {
+        LeaveInternal(true);
+
+        if (!transport::EnableSteam()) {
+            HUD::SHOW_NOTIFICATION("Steam is not available", 5.0f);
+            return;
+        }
+        const sockaddr_in addr = transport::SteamPeerAddr(hostSteamId);
+
+        g_role = NetRole::Client;
+        g_mySlot = kInvalidSlot;
+        g_welcomed = false;
+        g_hostAddr = addr;
+        g_joinStartTime = Now();
+
+        net::match::Match& M = net::match::Get();
+        M.info = {};
+        M.info.map = static_cast<uint8_t>(-1);
+        M.source = net::match::Source::DirectIp;
+
+        NetPlayers::Reset();
+
+        g_peers[0] = NetPeer{};
+        g_peers[0].active = true;
+        g_peers[0].slot = 0; // host is always slot 0
+        g_peers[0].addr = addr;
+        g_peers[0].lastRecv = Now();
+        g_peers[0].chan.Reset();
+
+        TO1_LOG("[NET] CLIENT connecting to Steam user %llu\n", static_cast<unsigned long long>(hostSteamId));
+        SendHello();
     }
 
     void HostGameRelay(const char* relayIp, uint16_t relayPort, uint32_t sessionId)

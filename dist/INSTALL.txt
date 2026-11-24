@@ -1,0 +1,27 @@
+TLOU2 Campaign Co-op - test build (milestone 1)
+Fan project, built on the Twelve Weeks client (GPL-3.0). Needs The Last of Us Part II Remastered on Steam.
+
+INSTALL
+1. Close the game.
+2. Open the game folder: Steam > Library > right-click The Last of Us Part II > Manage > Browse local files.
+3. If a winmm.dll is already there (for example from Twelve Weeks), rename it to winmm.dll.bak.
+4. Copy winmm.dll and tlou2-coop.ini from this zip into that folder.
+5. Start the game from Steam (not from the Twelve Weeks launcher).
+
+PLAY
+- Both players must be Steam friends and load the same chapter / checkpoint.
+- Host presses F7. The other player presses F8 - it finds the hosting friend and joins.
+- F6 leaves. The status line in the top-left corner shows what is happening.
+- No port forwarding, no IP addresses, no extra programs (it uses Steam's own networking).
+
+WHAT WORKS IN THIS TEST
+- You see your partner as a character that copies their movement, animation and weapon.
+- Shared enemy damage: when one of you hurts or kills an enemy, the same enemy is hurt or killed
+  in the other player's game too.
+- Enemy positions, pickups and story progress are NOT shared yet.
+- Both players need this same build (older builds refuse to connect).
+
+UNINSTALL
+Delete winmm.dll and tlou2-coop.ini (rename winmm.dll.bak back if you had one).
+
+If something goes wrong, send tlou2-coop.log from the game folder.

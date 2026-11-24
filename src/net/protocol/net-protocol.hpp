@@ -9,7 +9,7 @@ using NetSid64 = uint64_t;
 #endif
 
 constexpr uint32_t kNetMagic = 0x4F523254;   // 'T2RO'
-constexpr uint16_t kProtocolVersion = 41;
+constexpr uint16_t kProtocolVersion = 42;          // co-op: 42 adds NEVT_COOP_ENEMY
 constexpr uint16_t kNetDefaultPort = 7777;
 constexpr int      kMaxAnimCmdDwords = 1280;
 constexpr int      kMaxNetPlayers = 4;
@@ -17,7 +17,7 @@ constexpr int      kNetNameLen = 24;           // player display name
 constexpr int      kNetLookLen = 40;           // look/model string ("marlene-player")
 constexpr uint8_t  kInvalidSlot = 0xFF;
 constexpr uint8_t  kBroadcastSlot = 0xFF;         // event target: everyone
-constexpr float    kNetTimeoutSeconds = 5.0f;         // silence -> peer dropped
+constexpr float    kNetTimeoutSeconds = 10.0f;        // silence -> peer dropped (co-op: 10 s, a new Steam session can take a few seconds to deliver)
 constexpr float    kHelloResendSeconds = 0.5f;         // client join retry
 constexpr float    kJoinGiveUpSeconds = 10.0f;
 constexpr float    kEventResendSeconds = 0.1f;         // reliable event retry
@@ -163,7 +163,19 @@ enum NetEventType : uint8_t {
     NEVT_PLAYER_EXECUTION,   // ExecutionEvent -- the move is starting, play your half
     NEVT_EXECUTION_REQUEST,  // ExecutionRequestEvent -- may I execute you?
     NEVT_EXECUTION_REPLY,    // ExecutionReplyEvent   -- yes / no
+    NEVT_COOP_ENEMY,         // CoopEnemyEntry[n]     -- co-op: enemy health / death changes
 };
+
+// Co-op enemy sync. Both machines run the same chapter, so level enemies carry the same
+// entity name (spawner hash) on both. Each side reports its enemies' health drops and deaths;
+// the receiver applies a lower health and turns a death into a real kill of the same enemy.
+struct CoopEnemyEntry {
+    NetSid64 npc;            // entity name hash, e.g. SID("npc-glt-combat-forest-5")
+    float    health;
+    uint8_t  dead;
+};
+static_assert(sizeof(CoopEnemyEntry) == 13, "CoopEnemyEntry layout");
+constexpr int kCoopEnemyPerEvent = 15;      // 15 * 13 = 195 B, under the 200 B event payload cap
 
 struct ExecutionEvent {
     uint8_t  victimSlot;
