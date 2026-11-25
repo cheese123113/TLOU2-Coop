@@ -861,9 +861,35 @@ namespace net::replication {
     // arrives, replay position/animation/weapon onto it, and let a dead puppet run its death
     // ladder. None of the PvP layer (lives, respawn timers, spectate, kill feed, perks, HUD
     // widgets, supply boxes, AlwaysRun's forced difficulty / pause-menu lock) runs here.
+    // Co-op puppet recovery. A level reload (ours: destroys our copy of the partner with the
+    // old level; theirs: they go silent on a loading screen and come back with a new player and
+    // a new animation stream) used to leave the partner invisible for good, because a puppet is
+    // only spawned when we believe there is none.
+    static bool s_partnerStale[kMaxNetPlayers] = {};
+    constexpr float kPartnerStaleSeconds = 3.0f;      // a loading screen is 10 s+, a lag spike far less
+
+    static void DropPuppet(NetPlayer& p, const char* why)
+    {
+        TO1_LOG("[NetPlayer] slot %d (\"%s\") puppet dropped: %s -- respawning\n", p.netSlot, p.name, why);
+        NetClearRemoteAnim(p.netSlot);                     // clear-then-kill: the anim job must not touch it
+        if (p.npcSid && ENTITY::DOES_EXIST(p.npcSid)) ENTITY::KILL_ENTITY(p.npcSid);
+        p.npcSid = 0;
+        p.spawned = false;
+        p.animDetached = false;
+        p.puppetWeapon = 0;
+    }
+
     void CoopTick(float dt)
     {
         for (NetPlayer& p : NetPlayers::Remotes()) {
+            const float silent = NowSec() - p.lastPacketTime;
+            if (p.hasState && silent > kPartnerStaleSeconds) s_partnerStale[p.netSlot] = true;
+            else if (s_partnerStale[p.netSlot] && silent < 0.5f) {
+                s_partnerStale[p.netSlot] = false;
+                if (p.spawned && !p.dead) DropPuppet(p, "partner was silent (loading screen) and is back");
+            }
+            if (p.spawned && !p.dead && !p.Exists()) DropPuppet(p, "its entity is gone (level reload)");
+
             NetSetSlotStreamAlive(p.netSlot,
                 p.spawned && p.hasState && !p.animDetached &&
                 (NowSec() - p.lastPacketTime) < kAliveStaleSeconds);
