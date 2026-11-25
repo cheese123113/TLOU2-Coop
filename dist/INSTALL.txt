@@ -23,6 +23,8 @@ PLAY
 WHAT WORKS IN THIS TEST
 - You see your partner as a character that copies their movement, animation and weapon.
 - Gunshots: you see and hear your partner's shots (muzzle flash, sound, arrows).
+- Name tags: your partner's name is shown above their character (nametags=0 in tlou2-coop.ini hides it).
+- Difficulty: the joined player plays on the host's difficulty; their own is restored when they leave.
 - Shared enemies: the host's game runs the enemies. In the joining player's game the same
   enemies follow the host's positions, and damage and kills from either player apply to both.
 - Joining late: enemies the host already killed are removed, and enemies that appeared later

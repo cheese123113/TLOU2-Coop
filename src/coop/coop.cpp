@@ -39,6 +39,7 @@ namespace coop {
             std::string joinIp;                 // empty = F8 joins a Steam friend who is hosting
             std::vector<std::string> spawners;  // optional override: puppet spawner names to try first
             bool overlay = true;
+            bool nametags = true;               // partner name above their character
         };
         Config g_cfg;
 
@@ -72,11 +73,13 @@ namespace coop {
                  "; join_ip = leave empty to join Steam friends with F8. Only set an IP for LAN play.\n"
                  "; spawner = optional, comma separated NPC spawner names to use for the partner puppet\n"
                  "; overlay = 1 shows the co-op status line in the top-left corner\n"
+                 "; nametags = 1 shows your partner's name above their character\n"
                  "name=Player\n"
                  "look=auto\n"
                  "join_ip=\n"
                  "spawner=\n"
-                 "overlay=1\n";
+                 "overlay=1\n"
+                 "nametags=1\n";
         }
 
         void LoadConfig()
@@ -100,6 +103,7 @@ namespace coop {
                 else if (key == "look" && !val.empty())   g_cfg.look = val.substr(0, 39);
                 else if (key == "join_ip")                g_cfg.joinIp = val;
                 else if (key == "overlay")                g_cfg.overlay = (val != "0");
+                else if (key == "nametags")               g_cfg.nametags = (val != "0");
                 else if (key == "spawner") {
                     size_t start = 0;
                     while (start <= val.size()) {
@@ -604,6 +608,7 @@ namespace coop {
         int   g_spawnFails = 0;
         float g_clock = 0.0f;
         bool  g_hooksOn = false;
+        int   g_guestOwnDifficulty = -1;               // our difficulty before matching the host's
         float g_nextBeacon = 0.0f;
         void Flash(const char* msg);
         void BeginSteamSearch();
@@ -754,6 +759,10 @@ namespace coop {
             e.pos[0] = t.Position.x; e.pos[1] = t.Position.y; e.pos[2] = t.Position.z;
             e.rot[0] = t.Rotation.x; e.rot[1] = t.Rotation.y; e.rot[2] = t.Rotation.z; e.rot[3] = t.Rotation.w;
             e.life = g_hostLife;
+            const uint64_t diff = DC::Call<"get-difficulty">();
+            e.difficulty = diff <= 0xFE ? static_cast<uint8_t>(diff) : 0xFF;
+            static uint64_t s_loggedDiff = ~0ull;
+            if (diff != s_loggedDiff) { s_loggedDiff = diff; TO1_LOG("[coop] host difficulty = %llu\n", static_cast<unsigned long long>(diff)); }
             net::session::SendEvent(NEVT_COOP_WHERE, e);
             coop::enemies::SendAliveSnapshot();          // late-join reconcile on the partner
         }
@@ -916,6 +925,11 @@ namespace coop {
             multiplayer = false;
             coop::enemies::Reset();
             g_where = WhereState{};
+            if (g_guestOwnDifficulty >= 0) {                // put our own difficulty back
+                if (ENTITY::DOES_EXIST(SID("player"))) DC::Call<"set-difficulty">(static_cast<uint64_t>(g_guestOwnDifficulty));
+                TO1_LOG("[coop] difficulty restored to our own %d\n", g_guestOwnDifficulty);
+                g_guestOwnDifficulty = -1;
+            }
             if (g_hooksOn) { net::hooks::RemoveMultiplayerHooks(); g_hooksOn = false; }
         }
 
@@ -990,8 +1004,40 @@ namespace coop {
             }
         }
 
+        // Name tags: the partner's name centred 2.1 m above its puppet. Screen space is the
+        // engine's virtual 1280x720 (world-space-to-screen-space, the same space DrawTextPrintV
+        // uses). Hidden behind the camera (camera +Z is forward) and beyond 80 m.
+        void DrawNameTags()
+        {
+            if (!g_cfg.nametags || !net::session::IsConnected() || !ENTITY::DOES_EXIST(SID("player"))) return;
+            const uintptr_t camLoc = CAMERA::GET_CAMERA_LOCATOR();
+            if (!camLoc) return;
+            const Vector3 camPos = LOCATOR::GET_LOCATOR_POSITION(camLoc);
+            const Quaternion cq = LOCATOR::GET_LOCATOR_ROTATION(camLoc);
+            // rotate (0,0,1) by the camera quaternion
+            const float fx = 2.0f * (cq.x * cq.z + cq.w * cq.y);
+            const float fy = 2.0f * (cq.y * cq.z - cq.w * cq.x);
+            const float fz = 1.0f - 2.0f * (cq.x * cq.x + cq.y * cq.y);
+
+            for (NetPlayer& p : NetPlayers::Remotes()) {
+                if (!p.spawned || !p.npcSid || !ENTITY::DOES_EXIST(p.npcSid)) continue;
+                Vector3 head = LOCATOR::GET_TRANSFORM(p.npcSid).Position;
+                head.y += 2.1f;
+                const float dx = head.x - camPos.x, dy = head.y - camPos.y, dz = head.z - camPos.z;
+                const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (dist > 80.0f || dx * fx + dy * fy + dz * fz <= 0.0f) continue;
+                const Vector2 s = SYSTEM::WORLD_TO_SCREEN(head);
+                if (!std::isfinite(s.x) || !std::isfinite(s.y) || s.x < 0.0f || s.x > 1280.0f || s.y < 0.0f || s.y > 720.0f) continue;
+                const char* name = p.name[0] ? p.name : "Partner";
+                const float scale = dist < 15.0f ? 0.7f : 0.55f;
+                const vec2 sz = DebugDrawCommon::GetTextWidthHeight(name, scale);
+                DebugDrawCommon::DrawTextPrintV(s.x - sz.x * 0.5f, s.y - sz.y, scale, _rgb(255, 255, 255), "%s", name);
+            }
+        }
+
         void DrawOverlay()
         {
+            DrawNameTags();
             if (!g_cfg.overlay) return;
             char line[256];
             const char* state = g_searching ? "looking for a hosting friend..." : "idle";
@@ -1103,6 +1149,18 @@ namespace coop {
         }
         g_where.life = e.life;
         g_where.lifeKnown = true;
+
+        // Difficulty sync: play on the host's difficulty; our own is put back when we leave
+        // (StopSession). Our saves are blocked while joined, so it cannot overwrite our setting.
+        if (e.difficulty != 0xFF && ENTITY::DOES_EXIST(SID("player"))) {
+            const uint64_t mine = DC::Call<"get-difficulty">();
+            if (mine != e.difficulty && mine <= 0xFE) {
+                if (g_guestOwnDifficulty < 0) g_guestOwnDifficulty = static_cast<int>(mine);
+                DC::Call<"set-difficulty">(static_cast<uint64_t>(e.difficulty));
+                TO1_LOG("[coop] difficulty %llu -> host's %u\n", static_cast<unsigned long long>(mine), e.difficulty);
+                Flash("Difficulty set to the host's");
+            }
+        }
         g_where.w = e;                                     // the newest host position is used for placing
         g_where.have = true;
     }
