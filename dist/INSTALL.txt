@@ -1,42 +1,44 @@
-TLOU2 Campaign Co-op - test build (milestone 1)
-Fan project, built on the Twelve Weeks client (GPL-3.0). Needs The Last of Us Part II Remastered on Steam.
-
-INSTALL
-1. Close the game.
-2. Open the game folder: Steam > Library > right-click The Last of Us Part II > Manage > Browse local files.
-3. If a winmm.dll is already there (for example from Twelve Weeks), rename it to winmm.dll.bak.
-4. Copy winmm.dll and tlou2-coop.ini from this zip into that folder.
-5. Start the game from Steam (not from the Twelve Weeks launcher).
-
-PLAY
-- Both players must be Steam friends.
-- Host: load into the campaign, then press F7.
-- Friend: press F8 - even on the main menu. The game loads into the host's chapter and puts you
-  next to the host. If the host moves to a new part of the story, you follow automatically.
-- F6 leaves. The status line in the top-left corner shows what is happening.
-- No port forwarding, no IP addresses, no extra programs (it uses Steam's own networking).
+TLOU2 Campaign Co-op - test build (milestone 1)
+Fan project, built on the Twelve Weeks client (GPL-3.0). Needs The Last of Us Part II Remastered on Steam.
+
+INSTALL
+1. Close the game.
+2. Open the game folder: Steam > Library > right-click The Last of Us Part II > Manage > Browse local files.
+3. If a winmm.dll is already there (for example from Twelve Weeks), rename it to winmm.dll.bak.
+4. Copy winmm.dll and tlou2-coop.ini from this zip into that folder.
+5. Start the game from Steam (not from the Twelve Weeks launcher).
+
+PLAY
+- Both players must be Steam friends.
+- Host: load into the campaign, then press F7.
+- Friend: press F8 - even on the main menu. The game loads into the host's chapter and puts you
+  next to the host. If the host moves to a new part of the story, you follow automatically.
+  If you reach the next chapter before the host, you wait there up to 25 seconds for the host;
+  if the host does not come, you are taken back to the host.
+- F6 leaves. The status line in the top-left corner shows what is happening.
+- No port forwarding, no IP addresses, no extra programs (it uses Steam's own networking).
 - While you are joined to someone else's game, your game does not save (your own progress is safe).
 - Deaths: if the host dies or reloads, the joined player reloads with them. The joined player
   does not die from damage: a killing hit respawns them next to the host at full health instead,
   so their game stays in sync (no checkpoint reload).
-
-WHAT WORKS IN THIS TEST
+
+WHAT WORKS IN THIS TEST
 - You see your partner as a character that copies their movement, animation and weapon.
-- Gunshots: you see and hear your partner's shots (muzzle flash, sound, arrows).
+- Gunshots: you see and hear your partner's shots (muzzle flash, sound, arrows).
 - Name tags: your partner's name is shown above their character (nametags=0 in tlou2-coop.ini hides it).
 - Difficulty: the joined player plays on the host's difficulty; their own is restored when they leave.
-- Shared enemies: the host's game runs the enemies. In the joining player's game the same
+- Shared enemies: the host's game runs the enemies. In the joining player's game the same
   enemies follow the host's positions, and damage and kills from either player apply to both.
-  They walk, run and turn with their own animations and fire when the host's enemies fire.
+  They walk, run and turn with their own animations and fire when the host's enemies fire.
 - Joining late: enemies the host already killed are removed, and enemies that appeared later
   for the host are added, so both players face the same enemies.
 - Doors and pickups: a door one player opens opens for both, an item one player picks up
   disappears for the other (also for a player who joins late).
 - Enemies see and attack both players; hits on your partner's character hurt your partner.
-- Not shared yet: cutscenes.
-- Both players need this same build (older builds refuse to connect).
-
-UNINSTALL
-Delete winmm.dll and tlou2-coop.ini (rename winmm.dll.bak back if you had one).
-
-If something goes wrong, send tlou2-coop.log from the game folder.
+- Not shared yet: cutscenes.
+- Both players need this same build (older builds refuse to connect).
+
+UNINSTALL
+Delete winmm.dll and tlou2-coop.ini (rename winmm.dll.bak back if you had one).
+
+If something goes wrong, send tlou2-coop.log from the game folder.

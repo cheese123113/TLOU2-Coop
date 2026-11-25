@@ -784,7 +784,16 @@ namespace coop {
             uint32_t  life = 0;                            // the host's life we last followed
             bool      lifeKnown = false;
             bool      forceReload = false;                 // the host died / reloaded: reload with it
+            float     lostPlayerAt = -100.0f;              // our player vanished (a loading screen started)
+            bool      hadPlayer = false;                   // we had a player since joining (not the main menu)
+            StringId64 placedNode = 0;                     // the chapter part we were last placed in
+            float     aheadSince = -1.0f;                  // we walked into the next part before the host
         } g_where;
+
+        // How long the partner may stand in the next chapter part, after walking into it before
+        // the host, waiting for the host to arrive (the host's own loading screen) before it is
+        // taken back to the host's part.
+        constexpr float kAheadWait = 25.0f;
 
         void TickWhereClient()
         {
@@ -798,13 +807,23 @@ namespace coop {
                     TO1_LOG("[coop] our player was recreated (death / reload) -> placing next to the host again\n");
                     Flash("Respawned - moving you back to the host");
                 }
+                if (!proc && g_where.playerProc) g_where.lostPlayerAt = g_clock;
+                if (proc) g_where.hadPlayer = true;
                 g_where.playerProc = proc;
                 g_where.placed = false;
                 g_where.playerSince = proc ? g_clock : -1.0f;
             }
 
             TaskId cur;
-            const bool inPart = hasPlayer && CurrentTask(cur) && cur.node == g_where.w.node;
+            const bool haveTask = hasPlayer && CurrentTask(cur);
+            const bool inPart = haveTask && cur.node == g_where.w.node;
+            if (inPart) {
+                g_where.loadIssued = false;                // arrived: a later part change is a new event
+                if (g_where.aheadSince >= 0.0f) {
+                    g_where.aheadSince = -1.0f;
+                    TO1_LOG("[coop] the host reached our chapter part -> placing next to them\n");
+                }
+            }
             if (inPart && g_where.forceReload) {
                 // The host died or reloaded a checkpoint: its world reset, so reload ours too
                 // (the enemy reconcile then matches the host's enemies again).
@@ -823,6 +842,31 @@ namespace coop {
             if (!inPart) {
                 g_where.forceReload = false;               // a full load is coming anyway
                 g_where.placed = false;
+                // No player while we had one: a loading screen is running (the game's own chapter
+                // change, or a load we started). Never start a load on top of it; wait until it
+                // is done. (On the main menu there never was a player: load right away.)
+                if (!hasPlayer && g_where.hadPlayer && g_clock - g_where.lostPlayerAt < 90.0f) return;
+                // We walked into the next chapter part before the host (the host is still in the
+                // part we were placed in): wait here for the host -- usually only its loading
+                // screen behind -- and go back to the host only if it does not come.
+                if (haveTask && !g_where.loadIssued && g_where.placedNode
+                    && cur.node != g_where.placedNode && g_where.w.node == g_where.placedNode) {
+                    if (g_where.aheadSince < 0.0f) {
+                        g_where.aheadSince = g_clock;
+                        TO1_LOG("[coop] we reached the next chapter part %016llX before the host -> waiting up to %.0f s\n",
+                            static_cast<unsigned long long>(cur.node), kAheadWait);
+                        Flash("You reached the next chapter first - waiting for the host...");
+                    }
+                    if (g_clock - g_where.aheadSince < kAheadWait) return;
+                    g_where.aheadSince = -1.0f;
+                    TO1_LOG("[coop] the host did not follow into the next part -> back to the host\n");
+                    Flash("The host is still behind - taking you back to them...");
+                    g_where.loadIssued = true;
+                    g_where.loadAt = g_clock;
+                    DEBUG::PLAY_TASK(g_where.w.node, g_where.w.task, 0);
+                    return;
+                }
+                g_where.aheadSince = -1.0f;
                 if (!g_where.loadIssued || g_clock - g_where.loadAt > 60.0f) {
                     g_where.loadIssued = true;
                     g_where.loadAt = g_clock;
@@ -836,6 +880,7 @@ namespace coop {
             // In the host's part: once the level has settled, stand 1.2 m beside the host.
             if (!g_where.placed && g_clock - g_where.playerSince > 3.0f) {
                 g_where.placed = true;
+                g_where.placedNode = cur.node;
                 const Vector3 p{ g_where.w.pos[0] + 1.2f, g_where.w.pos[1], g_where.w.pos[2] };
                 const Quaternion q{ g_where.w.rot[0], g_where.w.rot[1], g_where.w.rot[2], g_where.w.rot[3] };
                 TeleportPlayer(p, q);
