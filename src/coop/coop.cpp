@@ -517,7 +517,33 @@ namespace coop {
             }
             StringId64 humanType = 0; int best = 0;
             for (auto& v : votes) if (v.second > best) { best = v.second; humanType = v.first; }
-            if (!humanType) { TO1_LOG("[coop] no human NPC spawner type in the loaded levels\n"); return; }
+            if (!humanType) {
+                // Fallback (Seattle's open-world hub loads only infected NPC spawners): borrow a
+                // humanoid INFECTED spawner. Infected are humans underneath, so a human look fits
+                // their skeleton; dogs and the big / deformed ones (clicker, bloater, shambler,
+                // rat king, stalker) have other skeletons and are never used. The puppet's AI is
+                // switched off right after the spawn either way.
+                std::vector<std::pair<StringId64, int>> infVotes;
+                for (const SpawnerInfo& s : all) {
+                    if (!s.type || s.name.rfind("npc-", 0) != 0) continue;
+                    if (s.name.find("inf") == std::string::npos && !IsInfectedArt(s.art)) continue;
+                    bool found = false;
+                    for (auto& v : infVotes) if (v.first == s.type) { ++v.second; found = true; }
+                    if (!found) infVotes.push_back({ s.type, 1 });
+                }
+                StringId64 infType = 0; int infBest = 0;
+                for (auto& v : infVotes) if (v.second > infBest) { infBest = v.second; infType = v.first; }
+                static const char* kNotHumanoid[] = { "dog", "clicker", "bloater", "shambler", "rat-king", "ratking", "stalker", "horse" };
+                for (const SpawnerInfo& s : all) {
+                    if (!s.sid || !infType || s.type != infType || s.name.rfind("npc-", 0) != 0) continue;
+                    bool bad = false;
+                    for (const char* k : kNotHumanoid) bad |= (s.name.find(k) != std::string::npos || s.art.find(k) != std::string::npos);
+                    if (!bad) out.push_back(s);
+                }
+                TO1_LOG("[coop] no human NPC spawner here -- fallback: %zu humanoid infected spawner candidates (type %016llX)\n",
+                    out.size(), static_cast<unsigned long long>(infType));
+                return;
+            }
 
             for (const SpawnerInfo& s : all)
                 if (s.sid && s.type == humanType && s.name.rfind("npc-", 0) == 0 && isPersonArt(s.art) &&
