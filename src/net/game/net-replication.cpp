@@ -1915,6 +1915,9 @@ namespace net::replication {
         case NEVT_COOP_HURT:
             coop::OnHurt(senderSlot, data, size);
             break;
+        case NEVT_COOP_ENEMY_FIRE:
+            coop::enemies::OnEnemyFire(senderSlot, data, size);
+            break;
 
         default:
             break;

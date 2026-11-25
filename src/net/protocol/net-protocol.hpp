@@ -9,7 +9,7 @@ using NetSid64 = uint64_t;
 #endif
 
 constexpr uint32_t kNetMagic = 0x4F523254;   // 'T2RO'
-constexpr uint16_t kProtocolVersion = 48;          // co-op: 42 NEVT_COOP_ENEMY, 43 CoopEnemies, 44 NEVT_COOP_WHERE, 45 CoopAlive, 46 NEVT_COOP_HURT, 47 CoopWhereEvent.life, 48 .difficulty
+constexpr uint16_t kProtocolVersion = 49;          // co-op: 42 NEVT_COOP_ENEMY, 43 CoopEnemies, 44 NEVT_COOP_WHERE, 45 CoopAlive, 46 NEVT_COOP_HURT, 47 CoopWhereEvent.life, 48 .difficulty, 49 NEVT_COOP_ENEMY_FIRE
 constexpr uint16_t kNetDefaultPort = 7777;
 constexpr int      kMaxAnimCmdDwords = 1280;
 constexpr int      kMaxNetPlayers = 4;
@@ -168,6 +168,7 @@ enum NetEventType : uint8_t {
     NEVT_COOP_ENEMY,         // CoopEnemyEntry[n]     -- co-op: enemy health / death changes
     NEVT_COOP_WHERE,         // CoopWhereEvent        -- co-op: host -> partner, "this is where I am"
     NEVT_COOP_HURT,          // CoopHurtEvent         -- co-op: "your character got hit here", to its owner
+    NEVT_COOP_ENEMY_FIRE,    // NetSid64              -- co-op: host -> partner, this enemy just fired
 };
 
 // Damage the partner's puppet took on this machine (an enemy shot it, mostly). The puppet itself

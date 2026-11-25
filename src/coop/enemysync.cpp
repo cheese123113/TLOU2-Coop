@@ -168,17 +168,22 @@ namespace coop::enemies {
         struct Follower {
             float targetPos[3] = {};
             float targetYaw = 0.0f;
-            float curPos[3] = {};
-            float curYaw = 0.0f;
-            bool  haveCur = false;
+            bool  haveTarget = false;
+            float hostSpeed = 0.0f;                        // m/s of the host's enemy (horizontal)
             bool  aiOff = false;
             float lastSeen = 0.0f;                         // g_clock of the last host update
+            float lastCmdGoal[3] = {};                     // last npc-move-to goal / speed mode
+            int   lastCmdMode = -1;
+            float lastCmdAt = -100.0f;
+            float lastTurnAt = -100.0f;
         };
         std::unordered_map<StringId64, Follower> g_followers;
         float g_clock = 0.0f;
         constexpr float kFollowerTimeout = 3.0f;           // not in the host's list for 3 s -> leave it alone
 
-        // Process pointers of the followers, for the root-locator guard on engine threads.
+        // Process pointers of the followers. Used by the co-op bullet-impact hook (a follower's
+        // copied shots must not hurt anyone here). Followers are no longer pinned by the
+        // root-locator guard: they walk with their own locomotion now.
         constexpr int kMaxFollowerPtrs = 64;
         std::atomic<uintptr_t> g_followerPtrs[kMaxFollowerPtrs];
 
@@ -210,34 +215,72 @@ namespace coop::enemies {
             return a;
         }
 
+        Quaternion YawQuat(float yaw) { return Quaternion{ 0.0f, std::sin(yaw * 0.5f), 0.0f, std::cos(yaw * 0.5f) }; }
+
+        float Dist3(const float* a, const float* b)
+        {
+            const float dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
+            return std::sqrt(dx * dx + dy * dy + dz * dz);
+        }
+
+        // Enemy animation sync. npc-move-to(npc, location, speed, 0, 0, 0, 0, 0) walks a scripted
+        // NPC there with its own locomotion -- speed 0 walk, 1 run, 2 sprint (measured with the
+        // F11 sweep: 2.2 / 5.3 / 5.9 m in 3 s; 3 is refused). So the copy is told where the host's
+        // enemy is going at the host's pace and animates itself; it is only snapped there when it
+        // falls more than 4 m behind, and turned on the spot to the host's facing when standing.
+        constexpr float kSnapDistance = 4.0f;
+
         void TickFollowers(float dt)
         {
-            const float k = (std::min)(1.0f, dt * 12.0f);  // smoothing toward the newest host position
+            (void)dt;
             for (auto it = g_followers.begin(); it != g_followers.end();) {
                 const StringId64 npc = it->first;
                 Follower& f = it->second;
                 if (!ENTITY::DOES_EXIST(npc) || g_clock - f.lastSeen > kFollowerTimeout) { it = g_followers.erase(it); continue; }
-                if (IsDead(npc)) { ++it; continue; }            // a corpse ragdolls on its own
+                if (IsDead(npc) || !f.haveTarget) { ++it; continue; }    // a corpse ragdolls on its own
 
                 if (!f.aiOff) { TakeOver(npc); f.aiOff = true; }
-                if (!f.haveCur) {
-                    const Transform t = LOCATOR::GET_TRANSFORM(npc);
-                    f.curPos[0] = t.Position.x; f.curPos[1] = t.Position.y; f.curPos[2] = t.Position.z;
-                    f.curYaw = YawOf(t.Rotation);
-                    f.haveCur = true;
-                }
-                // Far off (first update, or the host's enemy jumped): snap; otherwise glide.
-                const float dx = f.targetPos[0] - f.curPos[0], dy = f.targetPos[1] - f.curPos[1], dz = f.targetPos[2] - f.curPos[2];
-                const float a = (dx * dx + dy * dy + dz * dz > 25.0f) ? 1.0f : k;
-                for (int i = 0; i < 3; ++i) f.curPos[i] += (f.targetPos[i] - f.curPos[i]) * a;
-                f.curYaw = WrapAngle(f.curYaw + WrapAngle(f.targetYaw - f.curYaw) * a);
+                const Transform t = LOCATOR::GET_TRANSFORM(npc);
+                const float cur[3] = { t.Position.x, t.Position.y, t.Position.z };
+                const float err = Dist3(cur, f.targetPos);
+                const Vector3 target{ f.targetPos[0], f.targetPos[1], f.targetPos[2] };
 
-                const Quaternion q{ 0.0f, std::sin(f.curYaw * 0.5f), 0.0f, std::cos(f.curYaw * 0.5f) };
-                LOCATOR::SET_OBJECT_LOCATOR(npc, MEMORY::ALLOC_BOUND_FRAME(Vector3{ f.curPos[0], f.curPos[1], f.curPos[2] }, q));
+                if (err > kSnapDistance) {
+                    DC::Call<"npc-teleport-to">(npc, MEMORY::ALLOC_BOUND_FRAME(target, YawQuat(f.targetYaw)));
+                    f.lastCmdMode = -1;
+                }
+                else if (f.hostSpeed > 0.4f || err > 1.0f) {
+                    const float speed = (std::max)(f.hostSpeed, err * 0.8f);
+                    const int mode = speed < 1.8f ? 0 : (speed < 4.2f ? 1 : 2);
+                    if (mode != f.lastCmdMode || Dist3(f.targetPos, f.lastCmdGoal) > 0.75f || g_clock - f.lastCmdAt > 1.5f) {
+                        DC::Call<"npc-move-to">(npc, MEMORY::ALLOC_BOUND_FRAME(target, YawQuat(f.targetYaw)),
+                            static_cast<uint64_t>(mode), 0ull, 0ull, 0ull, 0ull, 0ull);
+                        memcpy(f.lastCmdGoal, f.targetPos, sizeof(f.lastCmdGoal));
+                        f.lastCmdMode = mode;
+                        f.lastCmdAt = g_clock;
+                    }
+                }
+                else if (std::fabs(WrapAngle(f.targetYaw - YawOf(t.Rotation))) > 0.45f && g_clock - f.lastTurnAt > 0.5f) {
+                    // standing: turn to the host's facing (in place, so it aims the same way)
+                    LOCATOR::SET_OBJECT_LOCATOR(npc, MEMORY::ALLOC_BOUND_FRAME(t.Position, YawQuat(f.targetYaw)));
+                    f.lastTurnAt = g_clock;
+                    f.lastCmdMode = -1;
+                }
                 ++it;
             }
             PublishFollowerPtrs();
         }
+
+        // ------------------------------------------------------------------ enemy gunshots
+        // Host: hk_Shot sees every weapon fire; one fired by an enemy is turned into an
+        // NEVT_COOP_ENEMY_FIRE for the partner, whose copy fires its weapon (npc-fire-weapon).
+        // The shot hook runs off our tick, so it only drops the shooter's process id into a
+        // small ring; the tick maps ids to enemy names (refreshed with the position packets).
+        constexpr int kShotRing = 32;
+        std::atomic<uint32_t> g_shotIds[kShotRing];
+        std::atomic<uint32_t> g_shotHead{ 0 };
+        uint32_t g_shotTail = 0;
+        std::vector<std::pair<uint32_t, StringId64>> g_enemyIds;   // host: process id -> enemy name
     }
 
     // ---------------------------------------------------------------------- late-join reconcile
@@ -325,6 +368,49 @@ namespace coop::enemies {
         g_alive.at = g_clock;
     }
 
+    void NoteShot(uint32_t shooterId)
+    {
+        if (!shooterId) return;
+        const uint32_t h = g_shotHead.fetch_add(1, std::memory_order_relaxed);
+        g_shotIds[h % kShotRing].store(shooterId, std::memory_order_release);
+    }
+
+    namespace {
+        // Host: refresh process id -> enemy name (with the position packets) and send the
+        // enemy shots the hook queued since the last tick.
+        void RefreshEnemyIds()
+        {
+            g_enemyIds.clear();
+            for (StringId64 npc : FEDRA::GET_ALL_ENEMIES()) {
+                const uintptr_t proc = static_cast<uintptr_t>(DcManager::LookupObject(npc));
+                uint32_t id = 0;
+                if (proc) id = *reinterpret_cast<const uint32_t*>(proc + 0x94);   // live process from the engine's own lookup
+                if (id) g_enemyIds.push_back({ id, npc });
+            }
+        }
+
+        void FlushEnemyShots()
+        {
+            const uint32_t head = g_shotHead.load(std::memory_order_acquire);
+            if (head - g_shotTail > kShotRing) g_shotTail = head - kShotRing;   // overflow: keep the newest
+            for (; g_shotTail != head; ++g_shotTail) {
+                const uint32_t id = g_shotIds[g_shotTail % kShotRing].load(std::memory_order_acquire);
+                for (const auto& [eid, npc] : g_enemyIds)
+                    if (eid == id) { net::session::SendEvent(NEVT_COOP_ENEMY_FIRE, npc); break; }
+            }
+        }
+    }
+
+    void OnEnemyFire(uint8_t senderSlot, const uint8_t* data, uint8_t size)
+    {
+        (void)senderSlot;
+        if (net::session::IsHost() || size < sizeof(NetSid64)) return;
+        NetSid64 npc = 0;
+        memcpy(&npc, data, sizeof(npc));
+        if (!npc || IsPuppet(npc) || !ENTITY::DOES_EXIST(npc) || IsDead(npc)) return;
+        DC::Call<"npc-fire-weapon">(npc);                  // visual: its bullets do no damage here
+    }
+
     bool IsFollowerPtr(uintptr_t npc)
     {
         if (!npc) return false;
@@ -350,7 +436,12 @@ namespace coop::enemies {
         if (!(dt > 0.0f) || dt > 1.0f) return;             // paused / loading
         g_clock += dt;
         TickDamage(dt);
-        if (net::session::IsHost()) TickHostPositions(dt);
+        if (net::session::IsHost()) {
+            TickHostPositions(dt);
+            static float s_nextIds = 0.0f;
+            if (g_clock >= s_nextIds) { s_nextIds = g_clock + 0.5f; RefreshEnemyIds(); }
+            FlushEnemyShots();
+        }
         else {
             TickFollowers(dt);
             if (coop::IsPlacedWithHost() && g_clock >= g_nextReconcile) {
@@ -374,9 +465,18 @@ namespace coop::enemies {
                 !std::isfinite(s.pos[2]) || !std::isfinite(s.yaw)) continue;
             if (!ENTITY::DOES_EXIST(s.npc)) continue;      // not spawned on this machine (yet)
             Follower& f = g_followers[s.npc];
+            if (f.haveTarget) {                            // the host enemy's pace, from its last two positions
+                const float age = g_clock - f.lastSeen;
+                if (age > 0.02f && age < 1.0f) {
+                    const float dx = s.pos[0] - f.targetPos[0], dz = s.pos[2] - f.targetPos[2];
+                    const float v = std::sqrt(dx * dx + dz * dz) / age;
+                    f.hostSpeed = f.hostSpeed * 0.5f + v * 0.5f;
+                }
+            }
             memcpy(f.targetPos, s.pos, sizeof(f.targetPos));
             f.targetYaw = s.yaw;
             f.lastSeen = g_clock;
+            f.haveTarget = true;
         }
     }
 

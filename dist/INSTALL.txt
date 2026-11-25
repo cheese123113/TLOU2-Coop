@@ -26,7 +26,8 @@ WHAT WORKS IN THIS TEST
 - Name tags: your partner's name is shown above their character (nametags=0 in tlou2-coop.ini hides it).
 - Difficulty: the joined player plays on the host's difficulty; their own is restored when they leave.
 - Shared enemies: the host's game runs the enemies. In the joining player's game the same
-  enemies follow the host's positions, and damage and kills from either player apply to both.
+  enemies follow the host's positions, and damage and kills from either player apply to both.
+  They walk, run and turn with their own animations and fire when the host's enemies fire.
 - Joining late: enemies the host already killed are removed, and enemies that appeared later
   for the host are added, so both players face the same enemies.
 - Enemies see and attack both players; hits on your partner's character hurt your partner.

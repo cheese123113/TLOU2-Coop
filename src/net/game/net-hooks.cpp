@@ -65,9 +65,13 @@ namespace net::hooks {
 
         uintptr_t local = NetPlayers::LocalPtr();
         if (!local) return;
-        if (*reinterpret_cast<uint32_t*>(fireArgs + 0x48) !=
-            *reinterpret_cast<uint32_t*>(local + 0x94))
-            return;   // not our shot (e.g. a remote puppet re-firing)
+        const uint32_t shooterId = *reinterpret_cast<uint32_t*>(fireArgs + 0x48);
+        if (shooterId != *reinterpret_cast<uint32_t*>(local + 0x94)) {
+            // Not our shot. On the co-op host it may be an enemy firing: the partner's copy of
+            // that enemy fires too (coop::enemies maps the shooter to the enemy's name).
+            if (net::session::IsHost()) coop::enemies::NoteShot(shooterId);
+            return;   // (a remote puppet re-firing is not an enemy and maps to nothing)
+        }
 
         FireShotEvent evt{ 0 };
         // note: evt.ori and evt.org are never read back so its fine to pass a "dummy" empty event over the network. in the future, should anyone read back evt.ori and evt.org,
@@ -600,8 +604,8 @@ namespace net::hooks {
 
     static void __fastcall hk_UpdateRootLocator(uintptr_t npc)
     {
-        // co-op: host-driven enemy followers keep the locator we set, like the puppet
-        if (LivePuppet(npc) || coop::enemies::IsFollowerPtr(npc)) {
+        // (co-op enemy followers are NOT pinned: they walk with npc-move-to and their own locomotion)
+        if (LivePuppet(npc)) {
             memcpy(reinterpret_cast<void*>(npc + 0x1E20),
                 reinterpret_cast<const void*>(npc + 0x130), 32);
             if (GuardHit(kGuardRoot))
@@ -1309,7 +1313,8 @@ namespace net::hooks {
     {
         if (attackInfo && net::session::IsConnected()) {
             const uintptr_t attacker = AttackerFromAttackInfo(attackInfo);
-            if (attacker && RemoteByPtr(attacker)) {
+            // a partner's puppet, or (on the guest) an enemy copy firing what the host's enemy fired
+            if (attacker && (RemoteByPtr(attacker) || coop::enemies::IsFollowerPtr(attacker))) {
                 __try { *reinterpret_cast<float*>(attackInfo + 64) = 0.0f; }   // AttackInfo damage
                 __except (EXCEPTION_EXECUTE_HANDLER) {}
             }
