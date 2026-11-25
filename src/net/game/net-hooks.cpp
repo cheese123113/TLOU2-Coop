@@ -1,5 +1,6 @@
 #include "coop/enemysync.hpp"
 #include "coop/coop.hpp"
+#include "coop/worldsync.hpp"
 #include "net-hooks.hpp"
 #include "net-player.hpp"
 #include "net-engine.hpp"
@@ -141,7 +142,12 @@ namespace net::hooks {
     static SafetyHookInline g_hkDoorOpen;
     static void __fastcall hk_DoorOpen(uintptr_t a1, uintptr_t door, uint64_t animKey, char a4, float a5, float a6, float a7)
     {
-        if (door && net::session::IsRunning()) {
+        // Co-op: only doors the LOCAL player opens are sent (not enemies', not ones the sync
+        // itself just opened here), and the host remembers them for a partner who joins late.
+        const uintptr_t opener = a1 ? *reinterpret_cast<uintptr_t*>(a1 + 8) : 0;
+        const bool ours = opener && opener == NetPlayers::LocalPtr();
+        const uint64_t doorSidPeek = door ? *reinterpret_cast<uint64_t*>(door + 0xC0) : 0;
+        if (door && net::session::IsRunning() && ours && !coop::world::IsRecentRemoteDoor(doorSidPeek)) {
             DoorOpenEvent evt{};
             evt.doorSid = *reinterpret_cast<uint64_t*>(door + 0xC0);
             evt.stateSid = 0;
@@ -166,6 +172,7 @@ namespace net::hooks {
                     static_cast<unsigned long long>(evt.stateSid),
                     evt.stateSid ? "" : "  (unresolved -> receiver default)");
                 net::session::SendEvent(NEVT_OPEN_DOOR, evt);
+                coop::world::NoteDoorOpened(evt);
             }
         }
         g_hkDoorOpen.call<void>(a1, door, animKey, a4, a5, a6, a7);
@@ -1337,6 +1344,7 @@ namespace net::hooks {
         g_hkFireCue = safetyhook::create_mid(reinterpret_cast<void*>(g_base + 0x1184462), hk_FireCue);
         g_hkWeapon_EmitProjectile = safetyhook::create_mid(reinterpret_cast<void*>(g_base + 0x118CEF0), hkWeapon_EmitProjectile);
         g_hkBulletHit = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x11A0280), reinterpret_cast<void*>(hk_CoopBulletHit));
+        g_hkDoorOpen = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0xB63250), reinterpret_cast<void*>(hk_DoorOpen));   // co-op door sync
         TO1_LOG("[HOOKS] co-op shot sync: shot=%d cue=%d arrow=%d impact=%d\n",
             g_hkShot ? 1 : 0, g_hkFireCue ? 1 : 0, g_hkWeapon_EmitProjectile ? 1 : 0, g_hkBulletHit ? 1 : 0);
 

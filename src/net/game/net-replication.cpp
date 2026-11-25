@@ -25,6 +25,7 @@
 #include <gameplay/melee.hpp>
 #include "coop/coop.hpp"
 #include "coop/enemysync.hpp"
+#include "coop/worldsync.hpp"
 
 namespace net::replication {
 
@@ -1630,6 +1631,8 @@ namespace net::replication {
         case NEVT_OPEN_DOOR: {
             DoorOpenEvent evt;
             if (!ReadPod(data, size, evt)) break;
+            coop::world::MarkRemoteDoor(evt.doorSid);      // our door hook must not send it back
+            coop::world::NoteDoorOpened(evt);              // host: for a partner who joins late
             DC::Call<"send-event">(SID("open-door"), evt.doorSid, MEMORY::NEW_BOXED_VALUE(BoxedValueType::kSymbol, evt.stateSid));
             TO1_LOG("[NET] %s opened door %llx state=%llx\n", sender.name,
                 static_cast<unsigned long long>(evt.doorSid),
@@ -1917,6 +1920,15 @@ namespace net::replication {
             break;
         case NEVT_COOP_ENEMY_FIRE:
             coop::enemies::OnEnemyFire(senderSlot, data, size);
+            break;
+        case NEVT_COOP_PICKUP:
+            coop::world::OnPickup(senderSlot, data, size);
+            break;
+        case NEVT_COOP_TAKEN:
+            coop::world::OnTaken(senderSlot, data, size);
+            break;
+        case NEVT_COOP_DOORS:
+            coop::world::OnDoors(senderSlot, data, size);
             break;
 
         default:

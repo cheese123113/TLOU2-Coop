@@ -1,5 +1,6 @@
 #include "coop/coop.hpp"
 #include "coop/enemysync.hpp"
+#include "coop/worldsync.hpp"
 
 #include "engine/script.hpp"
 #include "engine/structs.hpp"
@@ -24,6 +25,7 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include <algorithm>
 #include <cmath>
 
 extern bool multiplayer;   // match.cpp: gates the session/replication half of NetTick
@@ -642,6 +644,7 @@ namespace coop {
             multiplayer = true;
             g_spawnFails = 0;
             coop::enemies::Reset();
+            coop::world::Reset();
             g_lastSpawnTry = -100.0f;
 
             if (w == Want::Host) {
@@ -811,6 +814,7 @@ namespace coop {
                 g_where.placed = false;
                 g_where.playerSince = g_clock;
                 coop::enemies::Reset();
+            coop::world::Reset();
                 TO1_LOG("[coop] host life %u -> reloading the host's task with it\n", g_where.life);
                 Flash("The host respawned - reloading with them...");
                 DEBUG::PLAY_TASK(g_where.w.node, g_where.w.task, 0);
@@ -924,6 +928,7 @@ namespace coop {
             }
             multiplayer = false;
             coop::enemies::Reset();
+            coop::world::Reset();
             g_where = WhereState{};
             if (g_guestOwnDifficulty >= 0) {                // put our own difficulty back
                 if (ENTITY::DOES_EXIST(SID("player"))) DC::Call<"set-difficulty">(static_cast<uint64_t>(g_guestOwnDifficulty));
@@ -1195,6 +1200,7 @@ namespace coop {
         AutoProbe();
         TickMoveSweep();
         LobbyTick();
+        coop::world::Tick(TIME::GET_DELTA_TIME());
         TickWhereHost();
         TickWhereClient();
         TickGuestLife();
@@ -1256,6 +1262,26 @@ namespace coop {
     }
 
     bool IsPlacedWithHost() { return g_where.placed; }
+
+    void PickupSpawnerSids(std::vector<StringId64>& out)
+    {
+        std::vector<SpawnerInfo> all;
+        CollectSpawners(all, false);
+        std::vector<StringId64> types;
+        for (const SpawnerInfo& s : all)
+            if (s.type && (s.name.rfind("item-pickup-", 0) == 0 || s.name.rfind("coll-", 0) == 0 || s.name.rfind("collectible-", 0) == 0) &&
+                std::find(types.begin(), types.end(), s.type) == types.end())
+                types.push_back(s.type);
+        for (const SpawnerInfo& s : all)
+            if (s.sid && std::find(types.begin(), types.end(), s.type) != types.end()) out.push_back(s.sid);
+    }
+
+    uint32_t LoadedLevelCount()
+    {
+        std::vector<uintptr_t> levels;
+        LoadedLevels(levels);
+        return static_cast<uint32_t>(levels.size());
+    }
 
     namespace {
         std::atomic<uintptr_t> g_guestHealthComp{ 0 };

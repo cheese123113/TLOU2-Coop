@@ -30,8 +30,10 @@ WHAT WORKS IN THIS TEST
   They walk, run and turn with their own animations and fire when the host's enemies fire.
 - Joining late: enemies the host already killed are removed, and enemies that appeared later
   for the host are added, so both players face the same enemies.
+- Doors and pickups: a door one player opens opens for both, an item one player picks up
+  disappears for the other (also for a player who joins late).
 - Enemies see and attack both players; hits on your partner's character hurt your partner.
-- Not shared yet: pickups, doors, cutscenes.
+- Not shared yet: cutscenes.
 - Both players need this same build (older builds refuse to connect).
 
 UNINSTALL

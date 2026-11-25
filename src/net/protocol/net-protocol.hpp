@@ -9,7 +9,7 @@ using NetSid64 = uint64_t;
 #endif
 
 constexpr uint32_t kNetMagic = 0x4F523254;   // 'T2RO'
-constexpr uint16_t kProtocolVersion = 49;          // co-op: 42 NEVT_COOP_ENEMY, 43 CoopEnemies, 44 NEVT_COOP_WHERE, 45 CoopAlive, 46 NEVT_COOP_HURT, 47 CoopWhereEvent.life, 48 .difficulty, 49 NEVT_COOP_ENEMY_FIRE
+constexpr uint16_t kProtocolVersion = 50;          // co-op: 42 NEVT_COOP_ENEMY, 43 CoopEnemies, 44 NEVT_COOP_WHERE, 45 CoopAlive, 46 NEVT_COOP_HURT, 47 CoopWhereEvent.life, 48 .difficulty, 49 NEVT_COOP_ENEMY_FIRE, 50 world sync (pickups / doors)
 constexpr uint16_t kNetDefaultPort = 7777;
 constexpr int      kMaxAnimCmdDwords = 1280;
 constexpr int      kMaxNetPlayers = 4;
@@ -169,6 +169,16 @@ enum NetEventType : uint8_t {
     NEVT_COOP_WHERE,         // CoopWhereEvent        -- co-op: host -> partner, "this is where I am"
     NEVT_COOP_HURT,          // CoopHurtEvent         -- co-op: "your character got hit here", to its owner
     NEVT_COOP_ENEMY_FIRE,    // NetSid64              -- co-op: host -> partner, this enemy just fired
+    NEVT_COOP_PICKUP,        // NetSid64              -- co-op: this pickup was taken here, remove it there
+    NEVT_COOP_TAKEN,         // CoopSidList           -- co-op: host -> partner, pickups taken so far (late join)
+    NEVT_COOP_DOORS,         // CoopDoorList          -- co-op: host -> partner, doors opened so far (late join)
+};
+
+// Late-join world state, sent by the host every 10 s in chunks that fit the 200 B event cap.
+constexpr int kCoopSidsPerEvent = 24;       // 1 + 24 * 8 = 193 B
+struct CoopSidList {
+    uint8_t  count;
+    NetSid64 sids[kCoopSidsPerEvent];
 };
 
 // Damage the partner's puppet took on this machine (an enemy shot it, mostly). The puppet itself
@@ -310,6 +320,12 @@ struct DoorOpenEvent {
     NetSid64 stateSid;
 };
 static_assert(sizeof(DoorOpenEvent) == 16, "DoorOpenEvent layout");
+
+constexpr int kCoopDoorsPerEvent = 12;      // 1 + 12 * 16 = 193 B (NEVT_COOP_DOORS)
+struct CoopDoorList {
+    uint8_t       count;
+    DoorOpenEvent doors[kCoopDoorsPerEvent];
+};
 
 struct FireShotEvent {
     float ori[4];

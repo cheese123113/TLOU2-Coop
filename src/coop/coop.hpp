@@ -2,6 +2,9 @@
 
 #include "sid/sid.hpp"
 
+#include <cstdint>
+#include <vector>
+
 // Campaign co-op layer on top of the Twelve Weeks net code.
 //
 // M1 scope: two players run the same campaign chapter on their own machines; each sees the
@@ -23,6 +26,11 @@ namespace coop {
 
     // Partner: loaded into the host's chapter part and placed next to the host.
     bool IsPlacedWithHost();
+
+    // World sync helpers: every pickup item of the loaded levels (spawners of the same process
+    // type as "item-pickup-*" / "coll-*" / "collectible-*"), and how many levels are loaded.
+    void PickupSpawnerSids(std::vector<StringId64>& out);
+    uint32_t LoadedLevelCount();
 
     // Damage routing: the puppet of `ownerSlot` was hit here (called from the damage hook, may
     // run off the game thread) -> NEVT_COOP_HURT to that player; OnHurt applies a received hit
