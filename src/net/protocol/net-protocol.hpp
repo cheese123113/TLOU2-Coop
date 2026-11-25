@@ -9,7 +9,7 @@ using NetSid64 = uint64_t;
 #endif
 
 constexpr uint32_t kNetMagic = 0x4F523254;   // 'T2RO'
-constexpr uint16_t kProtocolVersion = 50;          // co-op: 42 NEVT_COOP_ENEMY, 43 CoopEnemies, 44 NEVT_COOP_WHERE, 45 CoopAlive, 46 NEVT_COOP_HURT, 47 CoopWhereEvent.life, 48 .difficulty, 49 NEVT_COOP_ENEMY_FIRE, 50 world sync (pickups / doors)
+constexpr uint16_t kProtocolVersion = 51;          // co-op: 42 NEVT_COOP_ENEMY, 43 CoopEnemies, 44 NEVT_COOP_WHERE, 45 CoopAlive, 46 NEVT_COOP_HURT, 47 CoopWhereEvent.life, 48 .difficulty, 49 NEVT_COOP_ENEMY_FIRE, 50 world sync (pickups / doors), 51 CoopWhereEvent.flags
 constexpr uint16_t kNetDefaultPort = 7777;
 constexpr int      kMaxAnimCmdDwords = 1280;
 constexpr int      kMaxNetPlayers = 4;
@@ -199,8 +199,10 @@ struct CoopWhereEvent {
     uint32_t life;           // +1 every time the host's player is recreated (death, checkpoint
                              // reload, restart): the partner reloads with the host when it changes
     uint8_t  difficulty;     // the host's get-difficulty; the partner plays on the same one
+    uint8_t  flags;          // kCoopWhereFriendlyFire: the host's friendly-fire setting, for both
 };
-static_assert(sizeof(CoopWhereEvent) == 49, "CoopWhereEvent layout");
+static_assert(sizeof(CoopWhereEvent) == 50, "CoopWhereEvent layout");
+constexpr uint8_t kCoopWhereFriendlyFire = 0x01;
 
 // Co-op enemy sync. Both machines run the same chapter, so level enemies carry the same
 // entity name (spawner hash) on both. Each side reports its enemies' health drops and deaths;

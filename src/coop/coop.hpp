@@ -7,12 +7,16 @@
 
 // Campaign co-op layer on top of the Twelve Weeks net code.
 //
-// M1 scope: two players run the same campaign chapter on their own machines; each sees the
-// other as an NPC puppet that replays their position, animation and held weapon. Enemies,
-// pickups and story progress are still local to each machine.
+// Two players run the same campaign chapter on their own machines; each sees the other as an
+// NPC puppet that replays their position, animation, held weapon and shots. The host's game is
+// the authority: the partner is loaded into the host's chapter part and placed beside it,
+// follows its deaths / reloads / chapter changes and difficulty, never saves, and never dies
+// (a killing hit respawns it beside the host). Enemies: coop/enemysync. Doors and pickups:
+// coop/worldsync.
 //
-// Controls (game window focused):  F7 host  |  F8 join (ip from tlou2-coop.ini)  |  F6 leave
-//                                   F9 log spawner / look discovery around the player
+// Controls (game window focused):  F7 host  |  F8 join (Steam friend, or join_ip)  |  F6 leave
+// Test keys (to be removed):  F9 spawner dump (Shift: task reload)  |  F10 test puppet
+//                             (Shift: save-block test)  |  F11 npc-move-to sweep
 namespace coop {
 
     void Tick();                       // every frame, from NetTick
@@ -26,6 +30,10 @@ namespace coop {
 
     // Partner: loaded into the host's chapter part and placed next to the host.
     bool IsPlacedWithHost();
+
+    // Players' bullets hurt each other: the host's friendlyfire setting (sent to the partner
+    // with NEVT_COOP_WHERE), off by default. Read by the bullet hook.
+    bool FriendlyFire();
 
     // World sync helpers: every pickup item of the loaded levels (spawners of the same process
     // type as "item-pickup-*" / "coll-*" / "collectible-*"), and how many levels are loaded.

@@ -1321,7 +1321,12 @@ namespace net::hooks {
         if (attackInfo && net::session::IsConnected()) {
             const uintptr_t attacker = AttackerFromAttackInfo(attackInfo);
             // a partner's puppet, or (on the guest) an enemy copy firing what the host's enemy fired
-            if (attacker && (RemoteByPtr(attacker) || coop::enemies::IsFollowerPtr(attacker))) {
+            const bool replayed = attacker && (RemoteByPtr(attacker) || coop::enemies::IsFollowerPtr(attacker));
+            // friendly fire off (the default): our own bullet hitting the partner's puppet does
+            // no damage, so no hurt event is sent to the partner
+            const bool friendly = attacker && victim && attacker == NetPlayers::LocalPtr() && RemoteByPtr(victim)
+                && !coop::FriendlyFire();
+            if (replayed || friendly) {
                 __try { *reinterpret_cast<float*>(attackInfo + 64) = 0.0f; }   // AttackInfo damage
                 __except (EXCEPTION_EXECUTE_HANDLER) {}
             }

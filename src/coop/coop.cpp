@@ -24,6 +24,7 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <unordered_map>
 #include <atomic>
 #include <algorithm>
 #include <cmath>
@@ -42,8 +43,10 @@ namespace coop {
             std::vector<std::string> spawners;  // optional override: puppet spawner names to try first
             bool overlay = true;
             bool nametags = true;               // partner name above their character
+            bool friendlyFire = false;          // players' bullets hurt each other (the host's setting counts)
         };
         Config g_cfg;
+        std::atomic<bool> g_hostFriendlyFire{ false };   // guest: the host's setting (NEVT_COOP_WHERE)
 
         std::string Trim(std::string s)
         {
@@ -76,12 +79,14 @@ namespace coop {
                  "; spawner = optional, comma separated NPC spawner names to use for the partner puppet\n"
                  "; overlay = 1 shows the co-op status line in the top-left corner\n"
                  "; nametags = 1 shows your partner's name above their character\n"
+                 "; friendlyfire = 1 lets your shots hurt your partner (the host's setting counts for both)\n"
                  "name=Player\n"
                  "look=auto\n"
                  "join_ip=\n"
                  "spawner=\n"
                  "overlay=1\n"
-                 "nametags=1\n";
+                 "nametags=1\n"
+                 "friendlyfire=0\n";
         }
 
         void LoadConfig()
@@ -106,6 +111,7 @@ namespace coop {
                 else if (key == "join_ip")                g_cfg.joinIp = val;
                 else if (key == "overlay")                g_cfg.overlay = (val != "0");
                 else if (key == "nametags")               g_cfg.nametags = (val != "0");
+                else if (key == "friendlyfire")           g_cfg.friendlyFire = (val == "1");
                 else if (key == "spawner") {
                     size_t start = 0;
                     while (start <= val.size()) {
@@ -743,6 +749,7 @@ namespace coop {
                 s_lastBump = g_clock;
                 ++g_hostLife;
                 g_nextWhere = 0.0f;                          // tell the partner right away
+                coop::world::OnHostWorldReset();             // taken pickups / opened doors since the checkpoint are back
                 TO1_LOG("[coop] host %s -> life %u\n", why, g_hostLife);
             }
         }
@@ -764,6 +771,7 @@ namespace coop {
             e.life = g_hostLife;
             const uint64_t diff = DC::Call<"get-difficulty">();
             e.difficulty = diff <= 0xFE ? static_cast<uint8_t>(diff) : 0xFF;
+            e.flags = g_cfg.friendlyFire ? kCoopWhereFriendlyFire : 0;
             static uint64_t s_loggedDiff = ~0ull;
             if (diff != s_loggedDiff) { s_loggedDiff = diff; TO1_LOG("[coop] host difficulty = %llu\n", static_cast<unsigned long long>(diff)); }
             net::session::SendEvent(NEVT_COOP_WHERE, e);
@@ -833,7 +841,7 @@ namespace coop {
                 g_where.placed = false;
                 g_where.playerSince = g_clock;
                 coop::enemies::Reset();
-            coop::world::Reset();
+                coop::world::Reset();
                 TO1_LOG("[coop] host life %u -> reloading the host's task with it\n", g_where.life);
                 Flash("The host respawned - reloading with them...");
                 DEBUG::PLAY_TASK(g_where.w.node, g_where.w.task, 0);
@@ -975,6 +983,7 @@ namespace coop {
             coop::enemies::Reset();
             coop::world::Reset();
             g_where = WhereState{};
+            g_hostFriendlyFire = false;
             if (g_guestOwnDifficulty >= 0) {                // put our own difficulty back
                 if (ENTITY::DOES_EXIST(SID("player"))) DC::Call<"set-difficulty">(static_cast<uint64_t>(g_guestOwnDifficulty));
                 TO1_LOG("[coop] difficulty restored to our own %d\n", g_guestOwnDifficulty);
@@ -1330,23 +1339,61 @@ namespace coop {
                 Flash("Difficulty set to the host's");
             }
         }
+        const bool ff = (e.flags & kCoopWhereFriendlyFire) != 0;
+        if (ff != g_hostFriendlyFire.exchange(ff, std::memory_order_relaxed))
+            TO1_LOG("[coop] host's friendly fire: %s\n", ff ? "on" : "off");
         g_where.w = e;                                     // the newest host position is used for placing
         g_where.have = true;
     }
 
     bool IsPlacedWithHost() { return g_where.placed; }
 
+    bool FriendlyFire()
+    {
+        return net::session::IsHost() ? g_cfg.friendlyFire : g_hostFriendlyFire.load(std::memory_order_relaxed);
+    }
+
+    // Pickups = spawners of the same process type as any spawner named "item-pickup-*",
+    // "coll-*" or "collectible-*". Reading every spawner's name is the slow part, so each
+    // level's (name sid, type) list is kept until that level unloads: a rebuild only reads the
+    // levels that streamed in since the last one (Seattle's open world streams often).
     void PickupSpawnerSids(std::vector<StringId64>& out)
     {
-        std::vector<SpawnerInfo> all;
-        CollectSpawners(all, false);
-        std::vector<StringId64> types;
-        for (const SpawnerInfo& s : all)
-            if (s.type && (s.name.rfind("item-pickup-", 0) == 0 || s.name.rfind("coll-", 0) == 0 || s.name.rfind("collectible-", 0) == 0) &&
-                std::find(types.begin(), types.end(), s.type) == types.end())
-                types.push_back(s.type);
-        for (const SpawnerInfo& s : all)
-            if (s.sid && std::find(types.begin(), types.end(), s.type) != types.end()) out.push_back(s.sid);
+        struct LevelCache { uintptr_t arr = 0; int32_t n = 0; std::vector<std::pair<StringId64, StringId64>> sps; };
+        static std::unordered_map<uintptr_t, LevelCache> s_levels;   // level -> its spawners
+        static std::vector<StringId64> s_pickupTypes;                // grows; process types are fixed
+
+        std::vector<uintptr_t> levels;
+        LoadedLevels(levels);
+        std::unordered_map<uintptr_t, LevelCache> keep;
+        size_t read = 0;
+        for (uintptr_t lvl : levels) {
+            // The same level is the same pointer with the same spawner array; a freed level's
+            // memory reused by another one shows a different array or count.
+            uintptr_t arr = 0; int32_t n = 0;
+            if (const uintptr_t sd = ReadPtr(lvl + kLvlSpawnData)) { arr = ReadPtr(sd + kSdArray); SafeRead(sd + kSdCount, &n, 4); }
+            auto it = s_levels.find(lvl);
+            if (it != s_levels.end() && it->second.arr == arr && it->second.n == n) { keep[lvl] = std::move(it->second); continue; }
+            LevelCache c; c.arr = arr; c.n = n;
+            std::vector<uintptr_t> sps;
+            LevelSpawners(lvl, sps);
+            for (uintptr_t sp : sps) {
+                const StringId64 sid = SpawnerSid(sp), type = SpawnerProcessType(sp);
+                if (!sid || !type) continue;
+                c.sps.emplace_back(sid, type);
+                if (std::find(s_pickupTypes.begin(), s_pickupTypes.end(), type) != s_pickupTypes.end()) continue;
+                const std::string name = SpawnerName(sp);
+                ++read;
+                if (name.rfind("item-pickup-", 0) == 0 || name.rfind("coll-", 0) == 0 || name.rfind("collectible-", 0) == 0)
+                    s_pickupTypes.push_back(type);
+            }
+            keep[lvl] = std::move(c);
+        }
+        s_levels = std::move(keep);
+        for (const auto& [lvl, c] : s_levels)
+            for (const auto& [sid, type] : c.sps)
+                if (std::find(s_pickupTypes.begin(), s_pickupTypes.end(), type) != s_pickupTypes.end()) out.push_back(sid);
+        if (read) TO1_LOG("[coop] pickup scan: read %zu new spawner names, %zu pickup types known\n", read, s_pickupTypes.size());
     }
 
     uint32_t LoadedLevelCount()

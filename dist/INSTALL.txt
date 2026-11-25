@@ -1,4 +1,4 @@
-TLOU2 Campaign Co-op - test build (milestone 1)
+TLOU2 Campaign Co-op - test build (M3.3)
 Fan project, built on the Twelve Weeks client (GPL-3.0). Needs The Last of Us Part II Remastered on Steam.
 
 INSTALL
@@ -33,8 +33,12 @@ WHAT WORKS IN THIS TEST
 - Joining late: enemies the host already killed are removed, and enemies that appeared later
   for the host are added, so both players face the same enemies.
 - Doors and pickups: a door one player opens opens for both, an item one player picks up
-  disappears for the other (also for a player who joins late).
-- Enemies see and attack both players; hits on your partner's character hurt your partner.
+  disappears for the other (also for a player who joins late). If the host dies or reloads,
+  items picked up since the checkpoint come back for both.
+- Enemies see and attack both players; their hits on your partner's character hurt your partner.
+- Friendly fire is off: your bullets do not hurt your partner. The host can turn it on with
+  friendlyfire=1 in tlou2-coop.ini (the host's setting counts for both players).
+  This covers bullets only so far: arrows, explosions and melee can still hurt your partner.
 - Not shared yet: cutscenes.
 - Both players need this same build (older builds refuse to connect).
 

@@ -16,6 +16,11 @@ namespace coop::world {
     void Tick(float dt);                                   // every frame while connected
     void Reset();                                          // session start / end
 
+    // Host: its player died or reloaded a checkpoint, so its world went back to the checkpoint.
+    // Pickups taken since then are back (they are dropped from the taken list once the reload
+    // has settled, by checking which ones exist again) and doors opened since then are closed.
+    void OnHostWorldReset();
+
     void OnPickup(uint8_t senderSlot, const uint8_t* data, uint8_t size);
     void OnTaken(uint8_t senderSlot, const uint8_t* data, uint8_t size);
     void OnDoors(uint8_t senderSlot, const uint8_t* data, uint8_t size);

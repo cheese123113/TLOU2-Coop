@@ -37,6 +37,20 @@ namespace coop::world {
         std::unordered_set<uint64_t> g_appliedDoors;
         bool g_wasPlaced = false;
         float g_nextLateSend = 0.0f;
+        float g_recheckTakenAt = -1.0f;                    // host: after a reload, re-check the taken list then
+
+        // Host, a few seconds after its world went back to a checkpoint: a taken pickup that
+        // exists again was taken after the checkpoint and is back -- not taken any more. (The
+        // partner's own reload follows the host's, so its copy of the list is rebuilt from this.)
+        void RecheckTaken()
+        {
+            size_t back = 0;
+            for (auto it = g_taken.begin(); it != g_taken.end();) {
+                if (ENTITY::DOES_EXIST(*it)) { g_takenSet.erase(*it); it = g_taken.erase(it); ++back; }
+                else ++it;
+            }
+            TO1_LOG("[world] host reload settled: %zu pickups are back, %zu stay taken\n", back, g_taken.size());
+        }
 
         void AddTaken(StringId64 sid)
         {
@@ -48,10 +62,14 @@ namespace coop::world {
             g_pickups.clear();
             coop::PickupSpawnerSids(g_pickups);
             g_present.clear();
+            std::unordered_map<StringId64, Vector3> where;     // positions of unloaded levels' items are dropped
             for (StringId64 sid : g_pickups) {
-                g_present[sid] = ENTITY::DOES_EXIST(sid);
-                if (g_present[sid]) g_where[sid] = LOCATOR::GET_TRANSFORM(sid).Position;
+                const bool now = ENTITY::DOES_EXIST(sid);
+                g_present[sid] = now;
+                if (now) where[sid] = LOCATOR::GET_TRANSFORM(sid).Position;
+                else if (auto it = g_where.find(sid); it != g_where.end()) where[sid] = it->second;
             }
+            g_where = std::move(where);
             g_lastRebuild = g_clock;
             TO1_LOG("[world] watching %zu pickups in %u loaded levels\n", g_pickups.size(), g_levelCount);
         }
@@ -127,7 +145,21 @@ namespace coop::world {
         g_pickups.clear(); g_present.clear(); g_where.clear(); g_levelCount = 0;
         g_taken.clear(); g_takenSet.clear(); g_doors.clear(); g_remoteDoors.clear();
         g_pendingTaken.clear(); g_pendingDoors.clear(); g_appliedDoors.clear();
-        g_wasPlaced = false; g_lastRebuild = -100.0f;
+        g_wasPlaced = false; g_lastRebuild = -100.0f; g_recheckTakenAt = -1.0f;
+    }
+
+    void OnHostWorldReset()
+    {
+        if (!net::session::IsHost()) return;
+        // The respawned world needs a moment before its pickups exist again; until then the
+        // watch must not see the reload as "everything vanished" either.
+        g_recheckTakenAt = g_clock + 6.0f;
+        g_lastRebuild = -100.0f;
+        g_pickups.clear();                                 // rebuilt from the reloaded levels
+        // Doors have no "is it open" query here: forget them. Doors opened before the checkpoint
+        // are open in the checkpoint the partner reloads into anyway; later ones are closed again.
+        TO1_LOG("[world] host world reset: %zu opened doors forgotten, taken pickups re-checked in 6 s\n", g_doors.size());
+        g_doors.clear();
     }
 
     void Tick(float dt)
@@ -136,8 +168,8 @@ namespace coop::world {
         g_clock += dt;
         if (!net::session::IsConnected() || !ENTITY::DOES_EXIST(SID("player"))) return;
 
-        // Rebuilding the pickup list walks every spawner (~0.1 s), so only when the set of
-        // loaded levels changed (checked once a second), at most every 5 s.
+        // Rebuild the pickup list only when the set of loaded levels changed (checked once a
+        // second), at most every 5 s; only newly loaded levels are read (PickupSpawnerSids).
         if (g_clock >= g_nextLevelCheck) {
             g_nextLevelCheck = g_clock + 1.0f;
             const uint32_t n = coop::LoadedLevelCount();
@@ -149,6 +181,14 @@ namespace coop::world {
         if (g_clock >= g_nextScan) { g_nextScan = g_clock + 0.5f; ScanPickups(); }
 
         if (net::session::IsHost()) {
+            if (g_recheckTakenAt >= 0.0f) {
+                // Hold the lists back until the reload settled: an old list would make the
+                // reloading partner remove pickups that came back.
+                if (g_clock < g_recheckTakenAt) return;
+                g_recheckTakenAt = -1.0f;
+                RecheckTaken();
+                g_nextLateSend = 0.0f;
+            }
             if (g_clock >= g_nextLateSend) { g_nextLateSend = g_clock + 10.0f; SendLateJoinLists(); }
         }
         else ApplyLateJoin();

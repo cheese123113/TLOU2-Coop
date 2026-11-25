@@ -46,6 +46,7 @@ join_ip=        ; empty = F8 joins a Steam friend; an IP = LAN join on UDP 7777
 spawner=        ; optional: NPC spawner names to borrow for the partner character
 overlay=1       ; status line in the top-left corner
 nametags=1      ; your partner's name above their character
+friendlyfire=0  ; 1 = your bullets hurt your partner (the host's setting counts for both)
 ```
 
 ## What works
@@ -57,7 +58,8 @@ nametags=1      ; your partner's name above their character
   enemies follow the host's, walking, running, turning and firing with their own animations.
   Enemies see and attack both players. Damage and kills from either player apply to both.
 - **Doors and pickups:** a door one player opens opens for both. An item one player picks up
-  disappears for the other.
+  disappears for the other. If the host dies or reloads, items picked up since the checkpoint
+  come back for both.
 - **Joining late:** a player who joins mid-chapter gets the host's enemies (killed ones removed,
   new ones added), opened doors and taken items.
 - **Chapters:** when the host moves to a new part of the story, the joined player follows. A joined
@@ -75,7 +77,8 @@ nametags=1      ; your partner's name above their character
 - Both players can grab the same item if they take it at the same moment.
 - Enemy melee, grabs, flinches and infected/dog special moves are not copied yet.
 - Thrown items (bottles, bricks, molotovs) are not shown yet.
-- Shooting your partner hurts them (friendly fire).
+- Turning friendly fire off (the default) only stops bullets. Your arrows, explosions and melee
+  can still hurt your partner.
 - Cutscenes are not shared yet.
 - Two players only.
 
@@ -86,7 +89,7 @@ nametags=1      ; your partner's name above their character
 | M1 | See each other: same chapter, partner character with movement, animation, weapon, name tag | done |
 | M2 | Shared combat: host-run enemies, shared damage and kills, enemy animations and gunfire, death / reload sync, difficulty sync | done (testing) |
 | M3 | Shared progress: doors, pickups, chapter changes, cutscenes and story moments | in progress |
-| M4 | Polish: downed / revive, in-game join menu, friendly fire toggle, thrown items, enemy melee and grabs, infected / dog specials | planned |
+| M4 | Polish: downed / revive, in-game join menu, thrown items, enemy melee and grabs, infected / dog specials | planned |
 | M5 | **No Return** co-op: play roguelike runs together (same encounters, shared waves, run rewards) | planned |
 
 Test keys still in the builds (will be removed): **F10** spawns a test copy of yourself
