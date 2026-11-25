@@ -990,6 +990,82 @@ namespace coop {
             TO1_LOG("[coop] F10: test puppet spawned %016llX\n", static_cast<unsigned long long>(npc)); Flash("F10: test puppet spawned 3 m ahead (F10 again removes it)");
         }
 
+        // ---------------------------------------------------------------- F11: npc-move-to sweep
+        // npc-move-to(npc, location, int32, int32, symbol, bool, bool, symbol) -- the argument
+        // types come from the engine's readers, their meaning does not. F11 runs every variant
+        // below on the F10 test Ellie (4 s each): she is put back 3 m ahead, sent ~6 m further,
+        // and how far she actually moved after 1 s and 3 s is logged. Walking shows up as a
+        // steady distance, running as a bigger one, a refused variant as ~0.
+        struct MoveVariant { int32_t a, b; const char* s1; bool b1, b2; const char* s2; };
+        const MoveVariant kMoveVariants[] = {
+            { 0, 0, nullptr, false, false, nullptr },
+            { 1, 0, nullptr, false, false, nullptr },
+            { 2, 0, nullptr, false, false, nullptr },
+            { 3, 0, nullptr, false, false, nullptr },
+            { 0, 1, nullptr, false, false, nullptr },
+            { 0, 2, nullptr, false, false, nullptr },
+            { 0, 0, "walk",  false, false, nullptr },
+            { 0, 0, "run",   false, false, nullptr },
+            { 0, 0, nullptr, false, false, "walk" },
+            { 0, 0, nullptr, false, false, "run" },
+            { 0, 0, nullptr, true,  false, nullptr },
+            { 0, 0, nullptr, false, true,  nullptr },
+        };
+        constexpr int kNumMoveVariants = sizeof(kMoveVariants) / sizeof(kMoveVariants[0]);
+        int     g_sweepIdx = -1;                           // -1 = not running
+        float   g_sweepAt = 0.0f;
+        bool    g_sweepLogged1 = false;
+        Vector3 g_sweepStart{};
+
+        float Dist(const Vector3& a, const Vector3& b)
+        {
+            const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+            return std::sqrt(dx * dx + dy * dy + dz * dz);
+        }
+
+        void StartMoveVariant(int i)
+        {
+            const MoveVariant& v = kMoveVariants[i];
+            const Transform pt = LOCATOR::GET_TRANSFORM(SID("player"));
+            const Vector3 start = LOCATOR::GET_POSITION_IN_FRONT_OF(SID("player"), 3.0f);
+            const Vector3 goal = LOCATOR::GET_POSITION_IN_FRONT_OF(SID("player"), 9.0f);
+            DC::Call<"npc-teleport-to">(g_testPuppet, MEMORY::ALLOC_BOUND_FRAME(start, pt.Rotation));
+            const uint64_t rc = DC::Call<"npc-move-to">(g_testPuppet, MEMORY::ALLOC_BOUND_FRAME(goal, pt.Rotation),
+                static_cast<uint64_t>(static_cast<uint32_t>(v.a)), static_cast<uint64_t>(static_cast<uint32_t>(v.b)),
+                v.s1 ? ToStringId64(v.s1) : 0ull, v.b1 ? 1ull : 0ull, v.b2 ? 1ull : 0ull, v.s2 ? ToStringId64(v.s2) : 0ull);
+            g_sweepStart = LOCATOR::GET_TRANSFORM(g_testPuppet).Position;
+            g_sweepAt = g_clock;
+            g_sweepLogged1 = false;
+            TO1_LOG("[movetest] variant %d: a=%d b=%d s1=%s b1=%d b2=%d s2=%s -> rc %llu\n", i, v.a, v.b,
+                v.s1 ? v.s1 : "-", v.b1, v.b2, v.s2 ? v.s2 : "-", static_cast<unsigned long long>(rc));
+            char line[96];
+            snprintf(line, sizeof(line), "F11 move test: variant %d of %d", i + 1, kNumMoveVariants);
+            Flash(line);
+        }
+
+        void TickMoveSweep()
+        {
+            if (g_sweepIdx < 0) return;
+            if (!g_testPuppet || !ENTITY::DOES_EXIST(g_testPuppet)) {
+                TO1_LOG("[movetest] stopped: the F10 test Ellie is gone\n");
+                g_sweepIdx = -1;
+                return;
+            }
+            const float t = g_clock - g_sweepAt;
+            const float moved = Dist(LOCATOR::GET_TRANSFORM(g_testPuppet).Position, g_sweepStart);
+            if (!g_sweepLogged1 && t >= 1.0f) { g_sweepLogged1 = true; TO1_LOG("[movetest] variant %d: moved %.2f m after 1 s\n", g_sweepIdx, moved); }
+            if (t >= 3.0f) {
+                TO1_LOG("[movetest] variant %d: moved %.2f m after 3 s\n", g_sweepIdx, moved);
+                if (++g_sweepIdx >= kNumMoveVariants) {
+                    g_sweepIdx = -1;
+                    TO1_LOG("[movetest] sweep done\n");
+                    Flash("F11 move test done - close the game or press F10 to remove her");
+                    return;
+                }
+                StartMoveVariant(g_sweepIdx);
+            }
+        }
+
         // Runs the discovery probe once per level, a few seconds after the player appears, so a
         // test run's log always has the spawner list without anyone pressing F9.
         void AutoProbe()
@@ -1101,6 +1177,10 @@ namespace coop {
                 }
                 else ProbeAroundPlayer();
             }
+            if (Pressed(VK_F11)) {
+                if (!g_testPuppet || !ENTITY::DOES_EXIST(g_testPuppet)) Flash("F11: press F10 first to spawn the test Ellie");
+                else if (g_sweepIdx < 0) { TO1_LOG("[movetest] sweep start\n"); g_sweepIdx = 0; StartMoveVariant(0); }
+            }
             if (Pressed(VK_F10)) {
                 if (GetAsyncKeyState(VK_SHIFT) & 0x8000) {
                     // Shift+F10: force the guest save block on / off, to test it without a partner.
@@ -1113,6 +1193,7 @@ namespace coop {
         }
 
         AutoProbe();
+        TickMoveSweep();
         LobbyTick();
         TickWhereHost();
         TickWhereClient();
