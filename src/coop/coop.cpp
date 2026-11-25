@@ -24,6 +24,7 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include <cmath>
 
 extern bool multiplayer;   // match.cpp: gates the session/replication half of NetTick
 
@@ -692,22 +693,45 @@ namespace coop {
         uintptr_t g_hostProc = 0;
         bool      g_hostWasDead = false;
 
+        // M2.8 counted the "Death" player state and every player-process change, and both flicker
+        // in normal play (8 false "lives" in 80 s, each one reloading the partner). Only two
+        // solid signals count now:
+        //  - a real death: health 0 for at least 0.5 s, then alive again;
+        //  - a real reload: a new player process AND the position jumped > 15 m at that moment.
+        float   g_hostDeadSince = -1.0f;
+        Vector3 g_hostLastPos{};
+
         void TrackHostLife()
         {
             const uintptr_t proc = static_cast<uintptr_t>(DcManager::LookupObject(SID("player")));
             if (!proc) return;
-            const bool dead = PLAYER::IS_IN_STATE(SID("Death"));
-            bool bumped = false;
-            if (proc != g_hostProc) { if (g_hostProc) bumped = true; g_hostProc = proc; }
-            if (g_hostWasDead && !dead) bumped = true;
-            g_hostWasDead = dead;
-            // Leaving Death and the new player process usually come together: count once per 5 s.
-            static float s_lastBump = -100.0f;
-            if (bumped && g_clock - s_lastBump > 5.0f) {
+            const Vector3 pos = LOCATOR::GET_TRANSFORM(SID("player")).Position;
+            const int hp = PLAYER::GET_HEALTH();
+
+            const char* why = nullptr;
+            if (hp <= 0) {
+                if (g_hostDeadSince < 0.0f) g_hostDeadSince = g_clock;
+                if (g_clock - g_hostDeadSince >= 0.5f) g_hostWasDead = true;
+            }
+            else {
+                g_hostDeadSince = -1.0f;
+                if (g_hostWasDead) { g_hostWasDead = false; why = "died and respawned"; }
+            }
+            if (g_hostProc && proc != g_hostProc) {
+                const float dx = pos.x - g_hostLastPos.x, dy = pos.y - g_hostLastPos.y, dz = pos.z - g_hostLastPos.z;
+                const float jump = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (jump > 15.0f && !why) why = "reloaded (new player, moved far)";
+                TO1_LOG("[coop] host player process changed (moved %.1f m)%s\n", jump, jump > 15.0f ? "" : " -- not a reload");
+            }
+            g_hostProc = proc;
+            g_hostLastPos = pos;
+
+            static float s_lastBump = -100.0f;              // one count per event, even if both signals fire
+            if (why && g_clock - s_lastBump > 5.0f) {
                 s_lastBump = g_clock;
                 ++g_hostLife;
                 g_nextWhere = 0.0f;                          // tell the partner right away
-                TO1_LOG("[coop] host player recreated (death / reload) -> life %u\n", g_hostLife);
+                TO1_LOG("[coop] host %s -> life %u\n", why, g_hostLife);
             }
         }
 
