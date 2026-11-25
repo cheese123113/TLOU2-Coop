@@ -1124,10 +1124,37 @@ namespace coop {
             static bool probed = false;
             if (!ENTITY::DOES_EXIST(SID("player"))) { playerSince = -1.0f; probed = false; g_testPuppet = 0; return; }
             if (playerSince < 0.0f) playerSince = g_clock;
-            if (!probed && g_clock - playerSince > 5.0f) {
+            // The full spawner dump (a short hitch, ~400 log lines) only while a co-op session
+            // runs; playing alone it is F9 only.
+            if (!probed && multiplayer && g_clock - playerSince > 5.0f) {
                 probed = true;
                 ProbeAroundPlayer();
             }
+        }
+
+        // Where the game is, in the log whenever it changes (campaign chapter part / task, No
+        // Return hideout / encounter): one line per change, plus the task object's names when
+        // the part (node) changes. Cheap (one script call a second), runs solo too -- it is
+        // how the No Return modes get mapped.
+        void LogWhereWeAre()
+        {
+            static float next = 0.0f;
+            static TaskId last{};
+            if (g_clock < next) return;
+            next = g_clock + 1.0f;
+            if (!ENTITY::DOES_EXIST(SID("player"))) return;
+            TaskId cur;
+            if (!CurrentTask(cur)) return;
+            if (cur.node == last.node && cur.task == last.task && cur.day == last.day) return;
+            const bool newNode = cur.node != last.node;
+            last = cur;
+            auto name = [](StringId64 s) { const char* n = SidName(s); return n ? n : "?"; };
+            TO1_LOG("[where] node %016llX \"%s\"  task %016llX \"%s\"  day %016llX \"%s\"  difficulty %llu\n",
+                static_cast<unsigned long long>(cur.node), name(cur.node),
+                static_cast<unsigned long long>(cur.task), name(cur.task),
+                static_cast<unsigned long long>(cur.day), name(cur.day),
+                static_cast<unsigned long long>(DC::Call<"get-difficulty">()));
+            if (newNode) ProbeTask();
         }
 
         // Name tags: the partner's name centred 2.1 m above its puppet. Screen space is the
@@ -1243,6 +1270,7 @@ namespace coop {
         }
 
         AutoProbe();
+        LogWhereWeAre();
         TickMoveSweep();
         LobbyTick();
         coop::world::Tick(TIME::GET_DELTA_TIME());

@@ -17,6 +17,8 @@
 #include <cstdio>
 #include <net-common.hpp>
 
+extern bool multiplayer;   // match.cpp: true while a co-op session runs
+
 void NetTick();
 
 bool s_debugMenuOpen = false;
@@ -88,15 +90,30 @@ namespace boot {
 		uint8_t& pauseOnFocusLoss = info[kPauseOnFocusLossOffset];
 		uint8_t& muteOnFocusLoss = info[kMuteOnFocusLossOffset];
 
-		static bool logged = false;
-		if (!logged) {
-			logged = true;
-			TO1_LOG("[boot] focus-loss settings: pause=%u mute=%u\n",
-				pauseOnFocusLoss, muteOnFocusLoss);
+		// Co-op: a game that pauses when its window loses focus stalls the session for the
+		// partner, so both are switched off -- but only while a co-op session runs. Playing
+		// alone (campaign or No Return) keeps the player's own settings; they are put back
+		// when the session ends.
+		static bool forcing = false;
+		static uint8_t savedPause = 0, savedMute = 0;
+		if (multiplayer) {
+			if (!forcing) {
+				forcing = true;
+				savedPause = pauseOnFocusLoss;
+				savedMute = muteOnFocusLoss;
+				TO1_LOG("[boot] co-op session: pause/mute on focus loss off (were pause=%u mute=%u)\n",
+					savedPause, savedMute);
+			}
+			if (pauseOnFocusLoss) pauseOnFocusLoss = 0;
+			if (muteOnFocusLoss) muteOnFocusLoss = 0;
 		}
-
-		if (pauseOnFocusLoss) pauseOnFocusLoss = 0;
-		if (muteOnFocusLoss) muteOnFocusLoss = 0;
+		else if (forcing) {
+			forcing = false;
+			pauseOnFocusLoss = savedPause;
+			muteOnFocusLoss = savedMute;
+			TO1_LOG("[boot] co-op session over: focus-loss settings back to pause=%u mute=%u\n",
+				savedPause, savedMute);
+		}
 	}
 
 	static bool ApplyBootPatches(HMODULE module) {
