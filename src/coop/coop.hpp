@@ -30,6 +30,13 @@ namespace coop {
     void OnPuppetDamaged(int ownerSlot, float amount);
     void OnHurt(uint8_t senderSlot, const uint8_t* data, uint8_t size);
 
+    // Guest "never dies": the local player's health component while joined as a guest (0
+    // otherwise; read by the damage hook on any thread), and the hook's "that hit would have
+    // killed us" flag -> respawn beside the host on the next frame.
+    uintptr_t GuestHealthComponent();
+    void NoteGuestDowned();
+    void TickGuestLife();              // main thread, from Tick
+
     // Partner puppet spawn gate: false while the level is not ready or a recent attempt
     // failed (retries every few seconds instead of every frame).
     bool CanSpawnPartner();

@@ -1285,6 +1285,18 @@ namespace net::hooks {
                 coop::OnPuppetDamaged(puppet->netSlot, amount);
                 amount = 0.0f;
             }
+            // A joined guest never dies (that would reload its checkpoint and reset its whole
+            // world): a hit that would kill it leaves 1 hp and it respawns beside the host
+            // instead. Health is the int at [component+0x40] (engine setter 0x141fecf70).
+            else if (health && health == coop::GuestHealthComponent()) {
+                int32_t hp = 0;
+                __try { hp = *reinterpret_cast<volatile int32_t*>(health + 0x40); }
+                __except (EXCEPTION_EXECUTE_HANDLER) { hp = 0; }
+                if (hp > 0 && amount >= static_cast<float>(hp)) {
+                    amount = static_cast<float>(hp - 1);
+                    coop::NoteGuestDowned();
+                }
+            }
         }
         return g_hkHealthApplyDamage.fastcall<char>(health, amount, a3, a4, a5, a6);
     }

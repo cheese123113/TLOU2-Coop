@@ -1033,6 +1033,7 @@ namespace coop {
         LobbyTick();
         TickWhereHost();
         TickWhereClient();
+        TickGuestLife();
 
         // Guest save block: on while joined to someone else's game (or forced for testing).
         const bool guest = net::session::IsRunning() && !net::session::IsHost();
@@ -1079,6 +1080,32 @@ namespace coop {
     }
 
     bool IsPlacedWithHost() { return g_where.placed; }
+
+    namespace {
+        std::atomic<uintptr_t> g_guestHealthComp{ 0 };
+        std::atomic<bool>      g_guestDowned{ false };
+    }
+
+    uintptr_t GuestHealthComponent() { return g_guestHealthComp.load(std::memory_order_relaxed); }
+    void NoteGuestDowned() { g_guestDowned.store(true, std::memory_order_relaxed); }
+
+    // Main thread, every frame: publish the guest's health component for the damage hook, and
+    // turn a "would have died" hit into a respawn beside the host (full health, no reload, so
+    // the guest's world -- enemies, doors, pickups -- stays exactly as it was).
+    void TickGuestLife()
+    {
+        const bool guest = net::session::IsRunning() && !net::session::IsHost() && g_where.have;
+        const uintptr_t proc = guest ? static_cast<uintptr_t>(DcManager::LookupObject(SID("player"))) : 0;
+        g_guestHealthComp.store(proc ? ReadPtr(proc + 0x610) : 0, std::memory_order_relaxed);
+
+        if (!g_guestDowned.exchange(false, std::memory_order_relaxed) || !proc) return;
+        const Vector3 p{ g_where.w.pos[0] + 1.2f, g_where.w.pos[1], g_where.w.pos[2] };
+        const Quaternion q{ g_where.w.rot[0], g_where.w.rot[1], g_where.w.rot[2], g_where.w.rot[3] };
+        TeleportPlayer(p, q);
+        PLAYER::SET_HEALTH(PLAYER::GET_MAX_HEALTH());
+        TO1_LOG("[coop] guest took a killing hit -> respawned beside the host at full health (no reload)\n");
+        Flash("You went down - respawned next to your partner");
+    }
 
     void OnPuppetDamaged(int ownerSlot, float amount)
     {
