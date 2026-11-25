@@ -685,9 +685,37 @@ namespace coop {
         // Host: every 2 s while a partner is connected.
         float g_nextWhere = 0.0f;
 
+        // The host's "life": +1 whenever its player is recreated (death -> checkpoint restart,
+        // a reload, a restart). Seen as a new player process, or as the player leaving the Death
+        // state. The partner reloads with the host when it changes (OnWhere / TickWhereClient).
+        uint32_t  g_hostLife = 0;
+        uintptr_t g_hostProc = 0;
+        bool      g_hostWasDead = false;
+
+        void TrackHostLife()
+        {
+            const uintptr_t proc = static_cast<uintptr_t>(DcManager::LookupObject(SID("player")));
+            if (!proc) return;
+            const bool dead = PLAYER::IS_IN_STATE(SID("Death"));
+            bool bumped = false;
+            if (proc != g_hostProc) { if (g_hostProc) bumped = true; g_hostProc = proc; }
+            if (g_hostWasDead && !dead) bumped = true;
+            g_hostWasDead = dead;
+            // Leaving Death and the new player process usually come together: count once per 5 s.
+            static float s_lastBump = -100.0f;
+            if (bumped && g_clock - s_lastBump > 5.0f) {
+                s_lastBump = g_clock;
+                ++g_hostLife;
+                g_nextWhere = 0.0f;                          // tell the partner right away
+                TO1_LOG("[coop] host player recreated (death / reload) -> life %u\n", g_hostLife);
+            }
+        }
+
         void TickWhereHost()
         {
-            if (!net::session::IsHost() || !net::session::IsConnected()) return;
+            if (!net::session::IsHost()) return;
+            TrackHostLife();
+            if (!net::session::IsConnected()) return;
             if (g_clock < g_nextWhere) return;
             g_nextWhere = g_clock + 2.0f;
             TaskId id;
@@ -697,6 +725,7 @@ namespace coop {
             e.node = id.node; e.task = id.task;
             e.pos[0] = t.Position.x; e.pos[1] = t.Position.y; e.pos[2] = t.Position.z;
             e.rot[0] = t.Rotation.x; e.rot[1] = t.Rotation.y; e.rot[2] = t.Rotation.z; e.rot[3] = t.Rotation.w;
+            e.life = g_hostLife;
             net::session::SendEvent(NEVT_COOP_WHERE, e);
             coop::enemies::SendAliveSnapshot();          // late-join reconcile on the partner
         }
@@ -711,18 +740,47 @@ namespace coop {
             float loadAt = 0.0f;
             bool  placed = false;
             float playerSince = -1.0f;
+            uintptr_t playerProc = 0;                      // our player process (changes on death / reload)
+            uint32_t  life = 0;                            // the host's life we last followed
+            bool      lifeKnown = false;
+            bool      forceReload = false;                 // the host died / reloaded: reload with it
         } g_where;
 
         void TickWhereClient()
         {
             if (!g_where.have || net::session::IsHost() || !net::session::IsRunning()) return;
-            const bool hasPlayer = ENTITY::DOES_EXIST(SID("player"));
-            if (!hasPlayer) g_where.playerSince = -1.0f;
-            else if (g_where.playerSince < 0.0f) g_where.playerSince = g_clock;
+            const uintptr_t proc = static_cast<uintptr_t>(DcManager::LookupObject(SID("player")));
+            const bool hasPlayer = proc != 0;
+            if (proc != g_where.playerProc) {
+                // Our player was recreated: a load finished, or WE died and the checkpoint
+                // restarted. Either way, stand next to the host again once it has settled.
+                if (g_where.placed && proc) {
+                    TO1_LOG("[coop] our player was recreated (death / reload) -> placing next to the host again\n");
+                    Flash("Respawned - moving you back to the host");
+                }
+                g_where.playerProc = proc;
+                g_where.placed = false;
+                g_where.playerSince = proc ? g_clock : -1.0f;
+            }
 
             TaskId cur;
             const bool inPart = hasPlayer && CurrentTask(cur) && cur.node == g_where.w.node;
+            if (inPart && g_where.forceReload) {
+                // The host died or reloaded a checkpoint: its world reset, so reload ours too
+                // (the enemy reconcile then matches the host's enemies again).
+                g_where.forceReload = false;
+                g_where.loadIssued = true;
+                g_where.loadAt = g_clock;
+                g_where.placed = false;
+                g_where.playerSince = g_clock;
+                coop::enemies::Reset();
+                TO1_LOG("[coop] host life %u -> reloading the host's task with it\n", g_where.life);
+                Flash("The host respawned - reloading with them...");
+                DEBUG::PLAY_TASK(g_where.w.node, g_where.w.task, 0);
+                return;
+            }
             if (!inPart) {
+                g_where.forceReload = false;               // a full load is coming anyway
                 g_where.placed = false;
                 if (!g_where.loadIssued || g_clock - g_where.loadAt > 60.0f) {
                     g_where.loadIssued = true;
@@ -1010,6 +1068,12 @@ namespace coop {
             g_where.loadIssued = false;                    // a new chapter part: load it once more
             g_where.placed = false;
         }
+        if (g_where.lifeKnown && e.life != g_where.life) {
+            g_where.forceReload = true;                    // the host died / reloaded a checkpoint
+            TO1_LOG("[coop] host life %u -> %u (died or reloaded)\n", g_where.life, e.life);
+        }
+        g_where.life = e.life;
+        g_where.lifeKnown = true;
         g_where.w = e;                                     // the newest host position is used for placing
         g_where.have = true;
     }

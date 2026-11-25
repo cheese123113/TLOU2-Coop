@@ -69,9 +69,16 @@ namespace coop::enemies {
                 if (!weapon) weapon = SID("pistol-beretta");
                 killed = net::engine::FireAttack(target, player, weapon, 0, 1.0e6f);
             }
-            if (!killed) ENTITY::SET_HEALTH(npc, 0.0f);
-            TO1_LOG("[enemies] partner killed %016llX -> %s\n", static_cast<unsigned long long>(npc),
-                killed ? "killed" : "health set to 0");
+            // The attack is refused for many story NPCs; npc-die is the engine's own death (the
+            // call Twelve Weeks' puppet death ladder falls back to), zero health the last resort.
+            const char* how = "killed by attack";
+            if (!killed) {
+                ENTITY::SET_HEALTH(npc, 0.0f);
+                DC::Call<"npc-die">(npc, 0ull, 0ull, 0ull, 0ull);
+                killed = IsDead(npc);
+                how = killed ? "npc-die" : "health set to 0 (npc-die did not take)";
+            }
+            TO1_LOG("[enemies] partner killed %016llX -> %s\n", static_cast<unsigned long long>(npc), how);
         }
 
         void TickDamage(float dt)

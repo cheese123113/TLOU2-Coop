@@ -16,6 +16,8 @@ PLAY
 - F6 leaves. The status line in the top-left corner shows what is happening.
 - No port forwarding, no IP addresses, no extra programs (it uses Steam's own networking).
 - While you are joined to someone else's game, your game does not save (your own progress is safe).
+- Deaths and checkpoint reloads: if the host dies or reloads, the joined player reloads with them;
+  if the joined player dies, they are moved back next to the host after respawning.
 
 WHAT WORKS IN THIS TEST
 - You see your partner as a character that copies their movement, animation and weapon.
