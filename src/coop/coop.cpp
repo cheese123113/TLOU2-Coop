@@ -720,8 +720,12 @@ namespace coop {
             if (g_hostProc && proc != g_hostProc) {
                 const float dx = pos.x - g_hostLastPos.x, dy = pos.y - g_hostLastPos.y, dz = pos.z - g_hostLastPos.z;
                 const float jump = std::sqrt(dx * dx + dy * dy + dz * dz);
-                if (jump > 15.0f && !why) why = "reloaded (new player, moved far)";
-                TO1_LOG("[coop] host player process changed (moved %.1f m)%s\n", jump, jump > 15.0f ? "" : " -- not a reload");
+                // (The lookup hands out a different process pointer many times a second in
+                // normal play, so only a real jump is worth a log line.)
+                if (jump > 15.0f) {
+                    if (!why) why = "reloaded (new player, moved far)";
+                    TO1_LOG("[coop] host player process changed and moved %.1f m\n", jump);
+                }
             }
             g_hostProc = proc;
             g_hostLastPos = pos;

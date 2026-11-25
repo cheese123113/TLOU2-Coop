@@ -1301,12 +1301,39 @@ namespace net::hooks {
         return g_hkHealthApplyDamage.fastcall<char>(health, amount, a3, a4, a5, a6);
     }
 
+    // Co-op bullet impacts: a partner's puppet re-fires every shot its player makes (NEVT_FIRE_SHOT
+    // -> npc-fire-weapon) so it is seen and heard. Those bullets are real in this world, but the
+    // damage they stand for is already synced by the shooter's own game (enemy sync / hurt
+    // events), so a bullet whose attacker is a puppet lands with 0 damage: impact FX, no hit.
+    static void __fastcall hk_CoopBulletHit(uintptr_t ctx, uintptr_t victim, uintptr_t attackInfo, char flags)
+    {
+        if (attackInfo && net::session::IsConnected()) {
+            const uintptr_t attacker = AttackerFromAttackInfo(attackInfo);
+            if (attacker && RemoteByPtr(attacker)) {
+                __try { *reinterpret_cast<float*>(attackInfo + 64) = 0.0f; }   // AttackInfo damage
+                __except (EXCEPTION_EXECUTE_HANDLER) {}
+            }
+        }
+        g_hkBulletHit.fastcall<void>(ctx, victim, attackInfo, flags);
+    }
+
     void InstallCoopHooks()
     {
         if (g_installed) return;
         g_installed = true;
 
         g_hkHealthApplyDamage = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x1FEB9A0), reinterpret_cast<void*>(hk_CoopHealthApplyDamage));
+
+        // Player gunshot sync (Twelve Weeks' PvP shot path): capture our shots, replay the
+        // partner's on its puppet (with the player fire sound and bow launch speed), and make
+        // the replayed bullets harmless here (hk_CoopBulletHit).
+        g_hkShot = safetyhook::create_mid(reinterpret_cast<void*>(g_base + 0x1182D5B), hk_Shot);
+        g_dFireCue = 0;
+        g_hkFireCue = safetyhook::create_mid(reinterpret_cast<void*>(g_base + 0x1184462), hk_FireCue);
+        g_hkWeapon_EmitProjectile = safetyhook::create_mid(reinterpret_cast<void*>(g_base + 0x118CEF0), hkWeapon_EmitProjectile);
+        g_hkBulletHit = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x11A0280), reinterpret_cast<void*>(hk_CoopBulletHit));
+        TO1_LOG("[HOOKS] co-op shot sync: shot=%d cue=%d arrow=%d impact=%d\n",
+            g_hkShot ? 1 : 0, g_hkFireCue ? 1 : 0, g_hkWeapon_EmitProjectile ? 1 : 0, g_hkBulletHit ? 1 : 0);
 
         g_hkCompositeMotionApply = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x1E0D600), reinterpret_cast<void*>(hk_CompositeMotionApply));
         g_hkAnimLayerCurInst = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x1601830), reinterpret_cast<void*>(hk_AnimLayerCurInst));
