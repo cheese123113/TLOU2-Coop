@@ -553,8 +553,9 @@ void NetPlayer::Spawn(Vector3 position, Quaternion rotation)
     DC::Call<"npc-set-script-mode">(npc, 0x2, 0x1); // disable npc ai
 
     DC::Call<"npc-set-ragdoll-allowed">(npc, 1ull, 0ull);
-    DC::Call<"npc-set-ignore">(npc, 1ull);
-    DC::Call<"set-object-invisible-to-ai">(npc, 1ull);
+    // Co-op: enemies must see and fight the partner, so the puppet is NOT hidden from the AI
+    // (Twelve Weeks set npc-set-ignore + set-object-invisible-to-ai). Hits on it are routed to
+    // the partner by the co-op damage hook (hk_CoopHealthApplyDamage).
     DC::Call<"npc-enable-hit-reactions">(npc, 0ull);
     DC::Call<"npc-enable-stun">(npc, 0ull);
     DC::Call<"npc-enable-dodges">(npc, 0ull);
@@ -569,7 +570,9 @@ void NetPlayer::Spawn(Vector3 position, Quaternion rotation)
             np ? *reinterpret_cast<void**>(np + 0x898) : nullptr,
             (np && (*reinterpret_cast<uint8_t*>(np + 0x9FD) & 1)) ? 1 : 0);
 
-    NPC::SET_FACTION_ID(npc, Faction::Buddy);   // co-op: on the player's side
+    // Player faction, not Buddy: TLOU2's enemies deliberately never notice buddies (stealth
+    // design), but they hunt anything on the player's side.
+    NPC::SET_FACTION_ID(npc, Faction::Player);
 
     InvalidatePathfindHandle(Ptr());
 

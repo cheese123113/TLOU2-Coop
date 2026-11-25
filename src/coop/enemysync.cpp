@@ -81,8 +81,10 @@ namespace coop::enemies {
             g_dmgAccum = 0.0f;
 
             std::vector<CoopEnemyEntry> changes;
+            std::vector<StringId64> seen;
             for (StringId64 npc : FEDRA::GET_ALL_ENEMIES()) {
                 if (!npc || IsPuppet(npc) || !ENTITY::DOES_EXIST(npc)) continue;
+                seen.push_back(npc);
                 const float h = ENTITY::GET_HEALTH(npc);
                 const bool dead = IsDead(npc);
 
@@ -98,6 +100,20 @@ namespace coop::enemies {
                 }
                 k.health = h;
                 k.dead = dead;
+            }
+
+            // A killed enemy leaves all-enemy-npcs right away, so it is usually never seen above
+            // in a dead state. Every enemy we knew alive that is no longer listed is checked
+            // directly: still there and dead (or at 0 health) -> that is a kill to report.
+            for (auto& [npc, k] : g_known) {
+                if (k.dead || std::find(seen.begin(), seen.end(), npc) != seen.end()) continue;
+                if (!ENTITY::DOES_EXIST(npc)) continue;            // despawned by a script: not a kill
+                if (IsDead(npc) || ENTITY::GET_HEALTH(npc) <= 0.0f) {
+                    changes.push_back({ npc, 0.0f, 1 });
+                    TO1_LOG("[enemies] local kill %016llX (left the enemy list dead)\n", static_cast<unsigned long long>(npc));
+                    k.dead = true;
+                    k.health = 0.0f;
+                }
             }
             if (!changes.empty()) FlushDamage(changes);
         }

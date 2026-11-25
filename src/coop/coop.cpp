@@ -6,6 +6,7 @@
 #include "engine/draw.hpp"
 #include "net-session.hpp"
 #include "net-steam.hpp"
+#include "net-engine.hpp"
 #include "net-hooks.hpp"
 #include "net-player.hpp"
 #include "log.hpp"
@@ -533,7 +534,8 @@ namespace coop {
                 }
                 StringId64 infType = 0; int infBest = 0;
                 for (auto& v : infVotes) if (v.second > infBest) { infBest = v.second; infType = v.first; }
-                static const char* kNotHumanoid[] = { "dog", "clicker", "bloater", "shambler", "rat-king", "ratking", "stalker", "horse" };
+                // (not "horse": the Sea Horse Hotel names all of Seattle's hub infected "npc-sea-horse-hotel-...")
+                static const char* kNotHumanoid[] = { "dog", "clicker", "bloater", "shambler", "rat-king", "ratking", "stalker" };
                 for (const SpawnerInfo& s : all) {
                     if (!s.sid || !infType || s.type != infType || s.name.rfind("npc-", 0) != 0) continue;
                     bool bad = false;
@@ -1013,6 +1015,32 @@ namespace coop {
     }
 
     bool IsPlacedWithHost() { return g_where.placed; }
+
+    void OnPuppetDamaged(int ownerSlot, float amount)
+    {
+        if (ownerSlot < 0 || ownerSlot >= kMaxNetPlayers || !(amount > 0.0f) || amount > 1.0e5f) return;
+        CoopHurtEvent e{ amount };
+        net::session::SendEvent(NEVT_COOP_HURT, e, static_cast<uint8_t>(ownerSlot));   // the event ring is thread safe
+        TO1_LOG("[coop] partner slot %d hit here for %.1f -> sent to them\n", ownerSlot, amount);
+    }
+
+    void OnHurt(uint8_t senderSlot, const uint8_t* data, uint8_t size)
+    {
+        if (size < sizeof(CoopHurtEvent)) return;
+        CoopHurtEvent e;
+        memcpy(&e, data, sizeof(e));
+        if (!(e.amount > 0.0f) || e.amount > 1.0e5f) return;
+        const uintptr_t me = static_cast<uintptr_t>(DcManager::LookupObject(SID("player")));
+        if (!me) return;
+        // Through the engine's own damage path (hit reaction, death when it runs out), like a
+        // bullet from the enemy that fired it on the other machine.
+        const bool ok = net::engine::FireAttack(me, me, SID("pistol-beretta"), 0, e.amount);
+        if (!ok) {
+            const int h = PLAYER::GET_HEALTH();
+            PLAYER::SET_HEALTH((std::max)(0, h - static_cast<int>(e.amount + 0.5f)));
+        }
+        TO1_LOG("[coop] hit for %.1f in slot %d's game -> applied %s\n", e.amount, senderSlot, ok ? "as an attack" : "to health");
+    }
 
     const char* LocalCharacterLook()
     {

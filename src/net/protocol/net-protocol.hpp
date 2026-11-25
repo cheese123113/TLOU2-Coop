@@ -9,7 +9,7 @@ using NetSid64 = uint64_t;
 #endif
 
 constexpr uint32_t kNetMagic = 0x4F523254;   // 'T2RO'
-constexpr uint16_t kProtocolVersion = 45;          // co-op: 42 NEVT_COOP_ENEMY, 43 CoopEnemies, 44 NEVT_COOP_WHERE, 45 CoopAlive
+constexpr uint16_t kProtocolVersion = 46;          // co-op: 42 NEVT_COOP_ENEMY, 43 CoopEnemies, 44 NEVT_COOP_WHERE, 45 CoopAlive, 46 NEVT_COOP_HURT
 constexpr uint16_t kNetDefaultPort = 7777;
 constexpr int      kMaxAnimCmdDwords = 1280;
 constexpr int      kMaxNetPlayers = 4;
@@ -167,7 +167,15 @@ enum NetEventType : uint8_t {
     NEVT_EXECUTION_REPLY,    // ExecutionReplyEvent   -- yes / no
     NEVT_COOP_ENEMY,         // CoopEnemyEntry[n]     -- co-op: enemy health / death changes
     NEVT_COOP_WHERE,         // CoopWhereEvent        -- co-op: host -> partner, "this is where I am"
+    NEVT_COOP_HURT,          // CoopHurtEvent         -- co-op: "your character got hit here", to its owner
 };
+
+// Damage the partner's puppet took on this machine (an enemy shot it, mostly). The puppet itself
+// takes none -- the amount is sent to the player it stands for, who takes it for real.
+struct CoopHurtEvent {
+    float amount;
+};
+static_assert(sizeof(CoopHurtEvent) == 4, "CoopHurtEvent layout");
 
 // Where the host is: the story task (task-play-debug! takes graph node + task) and the host's
 // position. Sent every 2 s while a partner is connected; the partner loads the task if it is

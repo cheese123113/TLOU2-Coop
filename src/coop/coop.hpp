@@ -24,6 +24,12 @@ namespace coop {
     // Partner: loaded into the host's chapter part and placed next to the host.
     bool IsPlacedWithHost();
 
+    // Damage routing: the puppet of `ownerSlot` was hit here (called from the damage hook, may
+    // run off the game thread) -> NEVT_COOP_HURT to that player; OnHurt applies a received hit
+    // to the local player.
+    void OnPuppetDamaged(int ownerSlot, float amount);
+    void OnHurt(uint8_t senderSlot, const uint8_t* data, uint8_t size);
+
     // Partner puppet spawn gate: false while the level is not ready or a recent attempt
     // failed (retries every few seconds instead of every frame).
     bool CanSpawnPartner();

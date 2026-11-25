@@ -1,4 +1,5 @@
 #include "coop/enemysync.hpp"
+#include "coop/coop.hpp"
 #include "net-hooks.hpp"
 #include "net-player.hpp"
 #include "net-engine.hpp"
@@ -1273,10 +1274,27 @@ namespace net::hooks {
     // replay animation safely. Everything that changes campaign rules (death skip, crafting
     // page, shoulder swap, sprint override, melee/damage routing, HUD overlay) stays off, and
     // every hook here passes straight through for anything that is not a live puppet.
+    // Co-op damage routing: a partner's puppet never takes damage on this machine. Whatever hit
+    // it (enemy fire on the host, mostly) is sent to the player it stands for, who takes it for
+    // real (coop::OnHurt there). The engine still gets the call, with 0 damage.
+    static char __fastcall hk_CoopHealthApplyDamage(uintptr_t health, float amount,
+        char a3, char a4, char a5, char a6)
+    {
+        if (amount > 0.0f) {
+            if (NetPlayer* puppet = PuppetOwningHealth(health)) {
+                coop::OnPuppetDamaged(puppet->netSlot, amount);
+                amount = 0.0f;
+            }
+        }
+        return g_hkHealthApplyDamage.fastcall<char>(health, amount, a3, a4, a5, a6);
+    }
+
     void InstallCoopHooks()
     {
         if (g_installed) return;
         g_installed = true;
+
+        g_hkHealthApplyDamage = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x1FEB9A0), reinterpret_cast<void*>(hk_CoopHealthApplyDamage));
 
         g_hkCompositeMotionApply = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x1E0D600), reinterpret_cast<void*>(hk_CompositeMotionApply));
         g_hkAnimLayerCurInst = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x1601830), reinterpret_cast<void*>(hk_AnimLayerCurInst));

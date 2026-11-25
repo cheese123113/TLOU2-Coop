@@ -23,7 +23,8 @@ WHAT WORKS IN THIS TEST
   enemies follow the host's positions, and damage and kills from either player apply to both.
 - Joining late: enemies the host already killed are removed, and enemies that appeared later
   for the host are added, so both players face the same enemies.
-- Not shared yet: enemies attacking the joining player, pickups, doors, story progress.
+- Enemies see and attack both players; hits on your partner's character hurt your partner.
+- Not shared yet: pickups, doors, cutscenes.
 - Both players need this same build (older builds refuse to connect).
 
 UNINSTALL
