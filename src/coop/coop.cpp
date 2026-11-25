@@ -1007,9 +1007,26 @@ namespace coop {
         // Name tags: the partner's name centred 2.1 m above its puppet. Screen space is the
         // engine's virtual 1280x720 (world-space-to-screen-space, the same space DrawTextPrintV
         // uses). Hidden behind the camera (camera +Z is forward) and beyond 80 m.
+        void DrawNameTagFor(StringId64 npc, const char* name, const Vector3& camPos, float fx, float fy, float fz)
+        {
+            if (!npc || !ENTITY::DOES_EXIST(npc)) return;
+            Vector3 head = LOCATOR::GET_TRANSFORM(npc).Position;
+            head.y += 2.1f;
+            const float dx = head.x - camPos.x, dy = head.y - camPos.y, dz = head.z - camPos.z;
+            const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (dist > 80.0f || dx * fx + dy * fy + dz * fz <= 0.0f) return;
+            const Vector2 s = SYSTEM::WORLD_TO_SCREEN(head);
+            if (!std::isfinite(s.x) || !std::isfinite(s.y) || s.x < 0.0f || s.x > 1280.0f || s.y < 0.0f || s.y > 720.0f) return;
+            const float scale = dist < 15.0f ? 0.7f : 0.55f;
+            const vec2 sz = DebugDrawCommon::GetTextWidthHeight(name, scale);
+            DebugDrawCommon::DrawTextPrintV(s.x - sz.x * 0.5f, s.y - sz.y, scale, _rgb(255, 255, 255), "%s", name);
+        }
+
         void DrawNameTags()
         {
-            if (!g_cfg.nametags || !net::session::IsConnected() || !ENTITY::DOES_EXIST(SID("player"))) return;
+            if (!g_cfg.nametags || !ENTITY::DOES_EXIST(SID("player"))) return;
+            const bool connected = net::session::IsConnected();
+            if (!connected && !g_testPuppet) return;
             const uintptr_t camLoc = CAMERA::GET_CAMERA_LOCATOR();
             if (!camLoc) return;
             const Vector3 camPos = LOCATOR::GET_LOCATOR_POSITION(camLoc);
@@ -1019,20 +1036,12 @@ namespace coop {
             const float fy = 2.0f * (cq.y * cq.z - cq.w * cq.x);
             const float fz = 1.0f - 2.0f * (cq.x * cq.x + cq.y * cq.y);
 
-            for (NetPlayer& p : NetPlayers::Remotes()) {
-                if (!p.spawned || !p.npcSid || !ENTITY::DOES_EXIST(p.npcSid)) continue;
-                Vector3 head = LOCATOR::GET_TRANSFORM(p.npcSid).Position;
-                head.y += 2.1f;
-                const float dx = head.x - camPos.x, dy = head.y - camPos.y, dz = head.z - camPos.z;
-                const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-                if (dist > 80.0f || dx * fx + dy * fy + dz * fz <= 0.0f) continue;
-                const Vector2 s = SYSTEM::WORLD_TO_SCREEN(head);
-                if (!std::isfinite(s.x) || !std::isfinite(s.y) || s.x < 0.0f || s.x > 1280.0f || s.y < 0.0f || s.y > 720.0f) continue;
-                const char* name = p.name[0] ? p.name : "Partner";
-                const float scale = dist < 15.0f ? 0.7f : 0.55f;
-                const vec2 sz = DebugDrawCommon::GetTextWidthHeight(name, scale);
-                DebugDrawCommon::DrawTextPrintV(s.x - sz.x * 0.5f, s.y - sz.y, scale, _rgb(255, 255, 255), "%s", name);
-            }
+            if (connected)
+                for (NetPlayer& p : NetPlayers::Remotes())
+                    if (p.spawned) DrawNameTagFor(p.npcSid, p.name[0] ? p.name : "Partner", camPos, fx, fy, fz);
+
+            // The F10 test Ellie gets a tag too (our own name), so tags can be checked solo.
+            if (g_testPuppet) DrawNameTagFor(g_testPuppet, net::session::LocalName(), camPos, fx, fy, fz);
         }
 
         void DrawOverlay()
