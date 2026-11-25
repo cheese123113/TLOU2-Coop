@@ -9,7 +9,7 @@ using NetSid64 = uint64_t;
 #endif
 
 constexpr uint32_t kNetMagic = 0x4F523254;   // 'T2RO'
-constexpr uint16_t kProtocolVersion = 42;          // co-op: 42 adds NEVT_COOP_ENEMY
+constexpr uint16_t kProtocolVersion = 45;          // co-op: 42 NEVT_COOP_ENEMY, 43 CoopEnemies, 44 NEVT_COOP_WHERE, 45 CoopAlive
 constexpr uint16_t kNetDefaultPort = 7777;
 constexpr int      kMaxAnimCmdDwords = 1280;
 constexpr int      kMaxNetPlayers = 4;
@@ -17,7 +17,7 @@ constexpr int      kNetNameLen = 24;           // player display name
 constexpr int      kNetLookLen = 40;           // look/model string ("marlene-player")
 constexpr uint8_t  kInvalidSlot = 0xFF;
 constexpr uint8_t  kBroadcastSlot = 0xFF;         // event target: everyone
-constexpr float    kNetTimeoutSeconds = 10.0f;        // silence -> peer dropped (co-op: 10 s, a new Steam session can take a few seconds to deliver)
+constexpr float    kNetTimeoutSeconds = 45.0f;        // silence -> peer dropped (co-op: 45 s -- a joining partner sends nothing during a loading screen)
 constexpr float    kHelloResendSeconds = 0.5f;         // client join retry
 constexpr float    kJoinGiveUpSeconds = 10.0f;
 constexpr float    kEventResendSeconds = 0.1f;         // reliable event retry
@@ -32,6 +32,8 @@ enum class NetPacketType : uint8_t {
     State = 5,   // both ways      : PlayerNetState (+ embedded reliable events)
     Goodbye = 6,   // either way     : clean disconnect
     AnimCmd = 7,   // both ways      : AnimCmdPayload -- the sender's captured AnimCmdList
+    CoopEnemies = 8, // host -> all  : CoopEnemiesPayload -- co-op: where the host's enemies are
+    CoopAlive = 9,   // host -> all  : CoopAlivePayload -- co-op: every enemy alive on the host (late-join reconcile)
 };
 
 enum class NetRejectReason : uint8_t {
@@ -164,7 +166,19 @@ enum NetEventType : uint8_t {
     NEVT_EXECUTION_REQUEST,  // ExecutionRequestEvent -- may I execute you?
     NEVT_EXECUTION_REPLY,    // ExecutionReplyEvent   -- yes / no
     NEVT_COOP_ENEMY,         // CoopEnemyEntry[n]     -- co-op: enemy health / death changes
+    NEVT_COOP_WHERE,         // CoopWhereEvent        -- co-op: host -> partner, "this is where I am"
 };
+
+// Where the host is: the story task (task-play-debug! takes graph node + task) and the host's
+// position. Sent every 2 s while a partner is connected; the partner loads the task if it is
+// not in it (also straight from the main menu) and then teleports next to the host.
+struct CoopWhereEvent {
+    NetSid64 node;           // task's parent node, e.g. SID("find-nora")
+    NetSid64 task;           // task name,          e.g. SID("nor-scar-forest-combat")
+    float    pos[3];
+    float    rot[4];
+};
+static_assert(sizeof(CoopWhereEvent) == 44, "CoopWhereEvent layout");
 
 // Co-op enemy sync. Both machines run the same chapter, so level enemies carry the same
 // entity name (spawner hash) on both. Each side reports its enemies' health drops and deaths;
@@ -176,6 +190,35 @@ struct CoopEnemyEntry {
 };
 static_assert(sizeof(CoopEnemyEntry) == 13, "CoopEnemyEntry layout");
 constexpr int kCoopEnemyPerEvent = 15;      // 15 * 13 = 195 B, under the 200 B event payload cap
+
+// Host-authoritative enemy positions (unreliable, newest wins, ~15 Hz). The partner turns each
+// listed enemy into a follower: its own AI is switched off and it moves to these positions.
+struct CoopEnemyState {
+    NetSid64 npc;            // entity name hash
+    float    pos[3];
+    float    yaw;            // radians around +Y
+    uint8_t  flags;          // bit0 = dead on the host
+};
+static_assert(sizeof(CoopEnemyState) == 25, "CoopEnemyState layout");
+constexpr int kMaxCoopEnemyStates = 48;     // 2 + 48 * 25 = 1202 B
+struct CoopEnemiesPayload {
+    uint16_t       count;
+    CoopEnemyState enemies[kMaxCoopEnemyStates];
+};
+
+// Every enemy alive on the host, sent with NEVT_COOP_WHERE every 2 s. A partner that joined
+// late (or walked into a trigger the host has not) reconciles against it: enemies the host
+// does not have are removed, enemies only the host has are spawned from the same-named spawner.
+struct CoopAliveEntry {
+    NetSid64 npc;
+    float    pos[3];
+};
+static_assert(sizeof(CoopAliveEntry) == 20, "CoopAliveEntry layout");
+constexpr int kMaxCoopAlive = 190;          // 2 + 190 * 20 = 3802 B (session buffers hold 4 KB)
+struct CoopAlivePayload {
+    uint16_t       count;
+    CoopAliveEntry enemies[kMaxCoopAlive];
+};
 
 struct ExecutionEvent {
     uint8_t  victimSlot;

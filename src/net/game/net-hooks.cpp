@@ -1,3 +1,4 @@
+#include "coop/enemysync.hpp"
 #include "net-hooks.hpp"
 #include "net-player.hpp"
 #include "net-engine.hpp"
@@ -598,7 +599,8 @@ namespace net::hooks {
 
     static void __fastcall hk_UpdateRootLocator(uintptr_t npc)
     {
-        if (LivePuppet(npc)) {
+        // co-op: host-driven enemy followers keep the locator we set, like the puppet
+        if (LivePuppet(npc) || coop::enemies::IsFollowerPtr(npc)) {
             memcpy(reinterpret_cast<void*>(npc + 0x1E20),
                 reinterpret_cast<const void*>(npc + 0x130), 32);
             if (GuardHit(kGuardRoot))

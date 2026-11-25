@@ -9,6 +9,8 @@
 #include "net-hooks.hpp"
 #include "net-player.hpp"
 #include "log.hpp"
+#include "sid/sidbase.hpp"
+#include "loader/config.hpp"
 #include "net-common.hpp"   // g_base
 #include "engine/gameinfo.hpp"
 
@@ -20,6 +22,7 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <atomic>
 
 extern bool multiplayer;   // match.cpp: gates the session/replication half of NetTick
 
@@ -389,9 +392,51 @@ namespace coop {
             }
         }
 
+        // ---- current story task (for "load where the host is") ------------------------------
+        // task-get-current (no args) returns the current task object; task-play-debug! takes
+        // (a, b, c) and plays TaskMgr.Find(a, b) -- a graph node and a task inside it. This probe
+        // dumps the task object and names every string id in it (and one pointer deeper), so
+        // the offsets of a and b can be read from the log. Names come from a sidbase.bin if one
+        // is on disk (Twelve Weeks leaves one in tlou-ii-mp\); without it only hashes show.
+        const char* SidName(StringId64 sid)
+        {
+            static bool tried = false;
+            if (!tried) {
+                tried = true;
+                if (!NdGameSdk::Sidbase::InitSidbase(PROJECT_DATA_DIR "/sidbase.bin"))
+                    NdGameSdk::Sidbase::InitSidbase("tlou-ii-mp/sidbase.bin");
+            }
+            const char* s = NdGameSdk::Sidbase::StringIdToStringInternal(sid);
+            return (s && s[0] != '#') ? s : nullptr;
+        }
+
+        void ProbeTask()
+        {
+            const uintptr_t task = static_cast<uintptr_t>(DC::Call<"task-get-current">());
+            TO1_LOG("[coop] current task object: %p\n", reinterpret_cast<void*>(task));
+            if (!PlausiblePtr(task)) return;
+            HexDump("task", task, 0x100);
+            for (uintptr_t off = 0; off < 0x200; off += 8) {
+                uint64_t q = 0;
+                if (!SafeRead(task + off, &q, 8)) continue;
+                if (const char* n = SidName(q))
+                    TO1_LOG("[coop]   task+0x%03llX = %016llX \"%s\"\n", static_cast<unsigned long long>(off), static_cast<unsigned long long>(q), n);
+                else if (PlausiblePtr(q)) {
+                    for (uintptr_t o2 = 0; o2 < 0x80; o2 += 8) {
+                        uint64_t q2 = 0;
+                        if (!SafeRead(q + o2, &q2, 8)) continue;
+                        if (const char* n2 = SidName(q2))
+                            TO1_LOG("[coop]   task+0x%03llX -> +0x%02llX = %016llX \"%s\"\n", static_cast<unsigned long long>(off),
+                                static_cast<unsigned long long>(o2), static_cast<unsigned long long>(q2), n2);
+                    }
+                }
+            }
+        }
+
         void ProbeAroundPlayer()
         {
             TO1_LOG("[coop] ===== discovery probe =====\n");
+            ProbeTask();
             std::vector<SpawnerInfo> all;
             CollectSpawners(all, true);
             int dumped = 0, chars = 0, shown = 0;
@@ -481,6 +526,48 @@ namespace coop {
             TO1_LOG("[coop] %zu human NPC spawner candidates (type %016llX)\n", out.size(), static_cast<unsigned long long>(humanType));
         }
 
+        // ---------------------------------------------------------------- guest save block
+        // A joined partner plays the HOST's chapter, so any save it writes would overwrite its own
+        // campaign progress. Every save request (checkpoints, manual saves, settings) runs through
+        // exe 0x141e38290(req): it starts the writer on [req+0x108], waits for it, and returns the
+        // writer's status ([[req+0x108]+0x14], 0 = OK, negative = SCE error). While blocked, the
+        // writer is never started: the status is set to 0 and 0 returned, so the game carries on
+        // as after a normal save. Runs on the save thread, hence the atomics.
+        constexpr uint32_t kRvaSaveRequest = 0x1E38290;
+        SafetyHookInline g_hkSaveRequest;
+        std::atomic<bool> g_blockSaves{ false };
+        std::atomic<int>  g_savesBlocked{ 0 };
+        bool g_testBlockSaves = false;                     // Shift+F10, for solo testing
+
+        uint32_t __fastcall hk_SaveRequest(uintptr_t req)
+        {
+            if (g_blockSaves.load(std::memory_order_relaxed)) {
+                int slot = -1;
+                SafeRead(req + 0x14, &slot, 4);
+                const uintptr_t writer = ReadPtr(req + 0x108);
+                if (writer) {
+                    uint32_t ok = 0;
+                    if (Readable(writer + 0x14, 4, true)) memcpy(reinterpret_cast<void*>(writer + 0x14), &ok, 4);
+                }
+                g_savesBlocked.fetch_add(1, std::memory_order_relaxed);
+                TO1_LOG("[coop] save blocked (slot %d) -- joined as a guest, your own save is untouched\n", slot);
+                return 0;
+            }
+            return g_hkSaveRequest.unsafe_fastcall<uint32_t>(req);
+        }
+
+        void InstallSaveBlock()
+        {
+            static const uint8_t kExpect[16] = { 0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0x48, 0x8B, 0x89, 0x08, 0x01, 0x00, 0x00 };
+            const uintptr_t f = g_base + kRvaSaveRequest;
+            if (!Readable(f, sizeof(kExpect)) || memcmp(reinterpret_cast<const void*>(f), kExpect, sizeof(kExpect)) != 0) {
+                TO1_LOG("[coop] save block NOT installed: save function prologue differs (other game build?)\n");
+                return;
+            }
+            g_hkSaveRequest = safetyhook::create_inline(reinterpret_cast<void*>(f), reinterpret_cast<void*>(hk_SaveRequest));
+            TO1_LOG("[coop] save block hook %s\n", g_hkSaveRequest ? "installed" : "FAILED");
+        }
+
         // ---------------------------------------------------------------- session control
         enum class Want { None, Host, Join };
 
@@ -500,12 +587,8 @@ namespace coop {
 
             std::string look = g_cfg.look;
             if (look == "auto") {
-                // The scan is slow (every pointer is checked before it is read), so it runs once
-                // per player process -- a level load or checkpoint makes a new one.
-                static uintptr_t s_scannedFor = 0;
-                const uintptr_t proc = static_cast<uintptr_t>(DcManager::LookupObject(SID("player")));
-                if (proc != s_scannedFor) { s_scannedFor = proc; g_playerLook = PlayerLookFromProcess(); }
-                look = g_playerLook.empty() ? std::string("ellie") : g_playerLook;
+                // The current story day says whose day it is (see LocalCharacterLook).
+                look = coop::LocalCharacterLook();
                 TO1_LOG("[coop] auto look -> \"%s\"\n", look.c_str());
             }
             net::session::SetLocalLook(look.c_str());
@@ -513,8 +596,11 @@ namespace coop {
 
         void StartSession(Want w)
         {
-            if (!ENTITY::DOES_EXIST(SID("player"))) {
-                TO1_LOG("[coop] host/join ignored: load into the campaign first\n");
+            // Hosting needs a loaded game (the host decides where everyone plays). Joining works
+            // from the main menu too: the host's NEVT_COOP_WHERE then loads its story task.
+            if (w == Want::Host && !ENTITY::DOES_EXIST(SID("player"))) {
+                TO1_LOG("[coop] host ignored: load into the campaign first\n");
+                Flash("Load into the campaign first, then press F7 to host");
                 return;
             }
             EnsureLocalIdentity();
@@ -538,6 +624,96 @@ namespace coop {
             }
             else {
                 BeginSteamSearch();
+            }
+        }
+
+        // ---------------------------------------------------------------- "join where the host is"
+        // The current story task, read off task-get-current's object (offsets from the task
+        // probe, build 4188655): task+0x08 = task name, [task+0x120]+0x08 = parent node,
+        // [task+0x120]+0x48 = the day's display name ("Ellie Day 2", "Abby Day 1", ...).
+        // task-play-debug!(node, task, 0) loads exactly that task, from the menu or in game.
+        struct TaskId { StringId64 node = 0, task = 0, day = 0; };
+
+        bool CurrentTask(TaskId& out)
+        {
+            const uintptr_t t = static_cast<uintptr_t>(DC::Call<"task-get-current">());
+            if (!PlausiblePtr(t)) return false;
+            uint64_t task = 0;
+            if (!SafeRead(t + 0x08, &task, 8) || !task) return false;
+            const uintptr_t node = ReadPtr(t + 0x120);
+            uint64_t nodeName = 0, day = 0;
+            if (!node || !SafeRead(node + 0x08, &nodeName, 8) || !nodeName) return false;
+            SafeRead(node + 0x48, &day, 8);
+            out = { nodeName, task, day };
+            return true;
+        }
+
+        void TeleportPlayer(const Vector3& p, const Quaternion& q)
+        {
+            DC::Call<"send-event">(SID("teleport-player"), SID("player"),
+                MEMORY::NEW_BOXED_VALUE(BoxedValueType::kBoundFrame, MEMORY::ALLOC_BOUND_FRAME(p, q)));
+        }
+
+        // Host: every 2 s while a partner is connected.
+        float g_nextWhere = 0.0f;
+
+        void TickWhereHost()
+        {
+            if (!net::session::IsHost() || !net::session::IsConnected()) return;
+            if (g_clock < g_nextWhere) return;
+            g_nextWhere = g_clock + 2.0f;
+            TaskId id;
+            if (!ENTITY::DOES_EXIST(SID("player")) || !CurrentTask(id)) return;
+            const Transform t = LOCATOR::GET_TRANSFORM(SID("player"));
+            CoopWhereEvent e{};
+            e.node = id.node; e.task = id.task;
+            e.pos[0] = t.Position.x; e.pos[1] = t.Position.y; e.pos[2] = t.Position.z;
+            e.rot[0] = t.Rotation.x; e.rot[1] = t.Rotation.y; e.rot[2] = t.Rotation.z; e.rot[3] = t.Rotation.w;
+            net::session::SendEvent(NEVT_COOP_WHERE, e);
+            coop::enemies::SendAliveSnapshot();          // late-join reconcile on the partner
+        }
+
+        // Partner: load the host's chapter part when not in it, then stand next to the host.
+        // Within the same part (node) a different task is NOT reloaded -- tasks change at every
+        // checkpoint and the partner normally walks through them alongside the host.
+        struct WhereState {
+            bool  have = false;
+            CoopWhereEvent w{};
+            bool  loadIssued = false;
+            float loadAt = 0.0f;
+            bool  placed = false;
+            float playerSince = -1.0f;
+        } g_where;
+
+        void TickWhereClient()
+        {
+            if (!g_where.have || net::session::IsHost() || !net::session::IsRunning()) return;
+            const bool hasPlayer = ENTITY::DOES_EXIST(SID("player"));
+            if (!hasPlayer) g_where.playerSince = -1.0f;
+            else if (g_where.playerSince < 0.0f) g_where.playerSince = g_clock;
+
+            TaskId cur;
+            const bool inPart = hasPlayer && CurrentTask(cur) && cur.node == g_where.w.node;
+            if (!inPart) {
+                g_where.placed = false;
+                if (!g_where.loadIssued || g_clock - g_where.loadAt > 60.0f) {
+                    g_where.loadIssued = true;
+                    g_where.loadAt = g_clock;
+                    TO1_LOG("[coop] loading the host's task %016llX / %016llX\n",
+                        static_cast<unsigned long long>(g_where.w.node), static_cast<unsigned long long>(g_where.w.task));
+                    Flash("Loading the host's game...");
+                    DEBUG::PLAY_TASK(g_where.w.node, g_where.w.task, 0);
+                }
+                return;
+            }
+            // In the host's part: once the level has settled, stand 1.2 m beside the host.
+            if (!g_where.placed && g_clock - g_where.playerSince > 3.0f) {
+                g_where.placed = true;
+                const Vector3 p{ g_where.w.pos[0] + 1.2f, g_where.w.pos[1], g_where.w.pos[2] };
+                const Quaternion q{ g_where.w.rot[0], g_where.w.rot[1], g_where.w.rot[2], g_where.w.rot[3] };
+                TeleportPlayer(p, q);
+                TO1_LOG("[coop] placed next to the host at %.1f %.1f %.1f\n", p.x, p.y, p.z);
+                Flash("Joined - you are next to the host");
             }
         }
 
@@ -625,6 +801,7 @@ namespace coop {
             }
             multiplayer = false;
             coop::enemies::Reset();
+            g_where = WhereState{};
             if (g_hooksOn) { net::hooks::RemoveMultiplayerHooks(); g_hooksOn = false; }
         }
 
@@ -708,7 +885,8 @@ namespace coop {
                 if (net::session::IsConnected()) state = net::session::IsHost() ? "hosting, partner connected" : "connected to host";
                 else state = net::session::IsHost() ? "hosting, waiting for partner" : "joining...";
             }
-            snprintf(line, sizeof(line), "CO-OP: %s   [F7 host  F8 join%s%s  F6 leave]", state,
+            snprintf(line, sizeof(line), "CO-OP: %s%s   [F7 host  F8 join%s%s  F6 leave]", state,
+                g_blockSaves.load(std::memory_order_relaxed) ? " - saving off" : "",
                 g_cfg.joinIp.empty() ? "" : " ", g_cfg.joinIp.c_str());
             DebugDrawCommon::DrawTextPrintV(20.0f, 20.0f, 0.6f, _rgb(235, 235, 235), "%s", line);
             if (g_flash[0] && g_clock < g_flashUntil)
@@ -723,6 +901,7 @@ namespace coop {
             init = true;
             LoadConfig();
             InstallLevelMgrCapture();
+            InstallSaveBlock();
             TO1_LOG("[coop] ready. F7 host, F8 join, F6 leave, F9 discovery probe\n");
         }
 
@@ -738,12 +917,50 @@ namespace coop {
             }
             if (Pressed(VK_F8)) StartSession(Want::Join);
             if (Pressed(VK_F6)) StopSession();
-            if (Pressed(VK_F9) && ENTITY::DOES_EXIST(SID("player"))) ProbeAroundPlayer();
-            if (Pressed(VK_F10) && ENTITY::DOES_EXIST(SID("player"))) ToggleTestPuppet();
+            if (Pressed(VK_F9) && ENTITY::DOES_EXIST(SID("player"))) {
+                if (GetAsyncKeyState(VK_SHIFT) & 0x8000) {
+                    // Shift+F9: reload the current task through task-play-debug! -- the exact
+                    // call a joining partner makes -- so the load path can be checked solo.
+                    TaskId id;
+                    if (CurrentTask(id)) {
+                        TO1_LOG("[coop] Shift+F9: task-play-debug! %016llX %016llX\n",
+                            static_cast<unsigned long long>(id.node), static_cast<unsigned long long>(id.task));
+                        Flash("Shift+F9: reloading the current task (join test)");
+                        DEBUG::PLAY_TASK(id.node, id.task, 0);
+                    }
+                    else Flash("Shift+F9: no current task found");
+                }
+                else ProbeAroundPlayer();
+            }
+            if (Pressed(VK_F10)) {
+                if (GetAsyncKeyState(VK_SHIFT) & 0x8000) {
+                    // Shift+F10: force the guest save block on / off, to test it without a partner.
+                    g_testBlockSaves = !g_testBlockSaves;
+                    TO1_LOG("[coop] Shift+F10: test save block %s\n", g_testBlockSaves ? "ON" : "OFF");
+                    Flash(g_testBlockSaves ? "Shift+F10: saving OFF (test) - try a save now" : "Shift+F10: saving back ON");
+                }
+                else if (ENTITY::DOES_EXIST(SID("player"))) ToggleTestPuppet();
+            }
         }
 
         AutoProbe();
         LobbyTick();
+        TickWhereHost();
+        TickWhereClient();
+
+        // Guest save block: on while joined to someone else's game (or forced for testing).
+        const bool guest = net::session::IsRunning() && !net::session::IsHost();
+        const bool block = guest || g_testBlockSaves;
+        if (block != g_blockSaves.load(std::memory_order_relaxed)) {
+            g_blockSaves.store(block, std::memory_order_relaxed);
+            TO1_LOG("[coop] saving %s\n", block ? "OFF (guest in the host's game)" : "back ON");
+        }
+        static int s_shownBlocked = 0;
+        const int blocked = g_savesBlocked.load(std::memory_order_relaxed);
+        if (blocked != s_shownBlocked) {
+            s_shownBlocked = blocked;
+            Flash("Save skipped - you are in the host's game, your own save is safe");
+        }
 
         // F8's Steam search runs before any session exists -- that is not "the session ended".
         if (multiplayer && !net::session::IsRunning() && g_hooksOn && !g_searching) {
@@ -753,6 +970,30 @@ namespace coop {
         }
 
         DrawOverlay();
+    }
+
+    void OnWhere(uint8_t senderSlot, const uint8_t* data, uint8_t size)
+    {
+        if (senderSlot != 0 || net::session::IsHost() || size < sizeof(CoopWhereEvent)) return;   // host is slot 0
+        CoopWhereEvent e;
+        memcpy(&e, data, sizeof(e));
+        if (!e.node || !e.task) return;
+        if (!g_where.have || e.node != g_where.w.node) {
+            g_where.loadIssued = false;                    // a new chapter part: load it once more
+            g_where.placed = false;
+        }
+        g_where.w = e;                                     // the newest host position is used for placing
+        g_where.have = true;
+    }
+
+    bool IsPlacedWithHost() { return g_where.placed; }
+
+    const char* LocalCharacterLook()
+    {
+        TaskId id;
+        if (CurrentTask(id) && (id.day == SID("Abby Day 1") || id.day == SID("Abby Day 2") || id.day == SID("Abby Day 3")))
+            return "abby";
+        return "ellie";
     }
 
     void Notify(const char* msg)
@@ -777,8 +1018,14 @@ namespace coop {
 
     StringId64 SpawnPartnerNpc(const Vector3& pos, const Quaternion& rot, const char* look)
     {
-        // The spawner's flag bytes are left alone: Twelve Weeks' "multiSpawn" offset (+0x82)
-        // holds other flags in this build (0x80 / 0xA0 seen), so writing it would corrupt them.
+        // Multi-spawn: the engine's spawn routine (FUN_140d606d0, behind spawn-entity-at-with-look)
+        // checks spawner byte +0x81 bit 0x10. Clear = if the spawner's NPC already exists it is
+        // REUSED and moved (that is how the partner used to take over a story NPC); set = a new
+        // entity is always created. Only that one bit is set for the call and the byte is put
+        // back. Spawners with +0x80 bit 0x08 are refused by the engine and skipped here.
+        constexpr uintptr_t kSpFlags0 = 0x80, kSpFlags1 = 0x81;
+        constexpr uint8_t   kDisabled = 0x08, kMultiSpawn = 0x10;
+
         std::vector<SpawnerInfo> cands;
         PuppetSpawnerCandidates(cands);
         if (cands.empty()) {
@@ -788,13 +1035,23 @@ namespace coop {
         const StringId64 lookSid = (look && look[0]) ? ToStringId64(look) : 0;
         int tried = 0;
         for (const SpawnerInfo& s : cands) {
+            uint8_t f0 = 0, f1 = 0;
+            if (!SafeRead(s.sp + kSpFlags0, &f0, 1) || !SafeRead(s.sp + kSpFlags1, &f1, 1)) continue;
+            if (f0 & kDisabled) continue;
             if (tried++ >= 8) break;
+
+            const bool setBit = !(f1 & kMultiSpawn);
+            if (setBit && !SafeWrite8(s.sp + kSpFlags1, static_cast<uint8_t>(f1 | kMultiSpawn))) continue;
             StringId64 npc = lookSid ? ENTITY::SPAWN_ENTITY(s.sid, pos, rot, lookSid) : 0;
             const bool withLook = npc != 0;
             if (!npc) npc = ENTITY::SPAWN_ENTITY(s.sid, pos, rot, 0);
-            TO1_LOG("[coop] partner spawn try %d: \"%s\" art=\"%s\" look=\"%s\" -> %016llX%s\n", tried, s.name.c_str(),
-                s.art.c_str(), look ? look : "", static_cast<unsigned long long>(npc),
-                npc ? (withLook ? " (with look)" : " (spawner's own look)") : "");
+            if (setBit) SafeWrite8(s.sp + kSpFlags1, f1);
+
+            const bool reused = npc != 0 && npc == s.sid;      // the level's own NPC came back, not a copy
+            TO1_LOG("[coop] partner spawn try %d: \"%s\" art=\"%s\" look=\"%s\" flags=%02X/%02X -> %016llX%s%s\n", tried,
+                s.name.c_str(), s.art.c_str(), look ? look : "", f0, f1, static_cast<unsigned long long>(npc),
+                npc ? (withLook ? " (with look)" : " (spawner's own look)") : "",
+                reused ? " WARNING: reused the level's own NPC" : (npc ? " (new copy)" : ""));
             if (npc) return npc;
         }
         TO1_LOG("[coop] partner spawn: all %d tries failed (at %.1f %.1f %.1f)\n", tried, pos.x, pos.y, pos.z);

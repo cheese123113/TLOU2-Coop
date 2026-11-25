@@ -532,7 +532,8 @@ void NetPlayer::Spawn(Vector3 position, Quaternion rotation)
     // Co-op: campaign levels have no MP client spawner, so coop::SpawnPartnerNpc borrows an
     // NPC spawner from the loaded level (multispawn forced on for the one call) and spawns the
     // partner's look straight at their reported position.
-    StringId64 npc = coop::SpawnPartnerNpc(position, rotation, LookOrDefault());
+    // Both players are in the same story day, so the partner wears this day's character.
+    StringId64 npc = coop::SpawnPartnerNpc(position, rotation, coop::LocalCharacterLook());
     if (!npc) {
         TO1_LOG("[NetPlayer] slot %d: NPC spawn failed\n", netSlot);
         return;

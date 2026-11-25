@@ -1,27 +1,32 @@
-TLOU2 Campaign Co-op - test build (milestone 1)
-Fan project, built on the Twelve Weeks client (GPL-3.0). Needs The Last of Us Part II Remastered on Steam.
-
-INSTALL
-1. Close the game.
-2. Open the game folder: Steam > Library > right-click The Last of Us Part II > Manage > Browse local files.
-3. If a winmm.dll is already there (for example from Twelve Weeks), rename it to winmm.dll.bak.
-4. Copy winmm.dll and tlou2-coop.ini from this zip into that folder.
-5. Start the game from Steam (not from the Twelve Weeks launcher).
-
-PLAY
-- Both players must be Steam friends and load the same chapter / checkpoint.
-- Host presses F7. The other player presses F8 - it finds the hosting friend and joins.
-- F6 leaves. The status line in the top-left corner shows what is happening.
-- No port forwarding, no IP addresses, no extra programs (it uses Steam's own networking).
-
-WHAT WORKS IN THIS TEST
-- You see your partner as a character that copies their movement, animation and weapon.
-- Shared enemy damage: when one of you hurts or kills an enemy, the same enemy is hurt or killed
-  in the other player's game too.
-- Enemy positions, pickups and story progress are NOT shared yet.
-- Both players need this same build (older builds refuse to connect).
-
-UNINSTALL
-Delete winmm.dll and tlou2-coop.ini (rename winmm.dll.bak back if you had one).
-
-If something goes wrong, send tlou2-coop.log from the game folder.
+TLOU2 Campaign Co-op - test build (milestone 1)
+Fan project, built on the Twelve Weeks client (GPL-3.0). Needs The Last of Us Part II Remastered on Steam.
+
+INSTALL
+1. Close the game.
+2. Open the game folder: Steam > Library > right-click The Last of Us Part II > Manage > Browse local files.
+3. If a winmm.dll is already there (for example from Twelve Weeks), rename it to winmm.dll.bak.
+4. Copy winmm.dll and tlou2-coop.ini from this zip into that folder.
+5. Start the game from Steam (not from the Twelve Weeks launcher).
+
+PLAY
+- Both players must be Steam friends.
+- Host: load into the campaign, then press F7.
+- Friend: press F8 - even on the main menu. The game loads into the host's chapter and puts you
+  next to the host. If the host moves to a new part of the story, you follow automatically.
+- F6 leaves. The status line in the top-left corner shows what is happening.
+- No port forwarding, no IP addresses, no extra programs (it uses Steam's own networking).
+- While you are joined to someone else's game, your game does not save (your own progress is safe).
+
+WHAT WORKS IN THIS TEST
+- You see your partner as a character that copies their movement, animation and weapon.
+- Shared enemies: the host's game runs the enemies. In the joining player's game the same
+  enemies follow the host's positions, and damage and kills from either player apply to both.
+- Joining late: enemies the host already killed are removed, and enemies that appeared later
+  for the host are added, so both players face the same enemies.
+- Not shared yet: enemies attacking the joining player, pickups, doors, story progress.
+- Both players need this same build (older builds refuse to connect).
+
+UNINSTALL
+Delete winmm.dll and tlou2-coop.ini (rename winmm.dll.bak back if you had one).
+
+If something goes wrong, send tlou2-coop.log from the game folder.

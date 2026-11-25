@@ -13,6 +13,7 @@
 #include "net-matchmaking.hpp"
 #include "net-account.hpp"
 #include "net-debug.hpp"
+#include "coop/enemysync.hpp"
 
 namespace net::session {
 
@@ -94,6 +95,8 @@ namespace net::session {
         case NetPacketType::State:   return "State";
         case NetPacketType::Goodbye: return "Goodbye";
         case NetPacketType::AnimCmd: return "AnimCmd";
+        case NetPacketType::CoopEnemies: return "CoopEnemies";
+        case NetPacketType::CoopAlive: return "CoopAlive";
         default:                     return "?";
         }
     }
@@ -538,9 +541,31 @@ namespace net::session {
         case NetPacketType::State:   HandleState(hdr, body, bodyLen, from); break;
         case NetPacketType::AnimCmd: HandleAnimCmd(hdr, body, bodyLen, from); break;
         case NetPacketType::Goodbye: HandleGoodbye(from); break;
+        case NetPacketType::CoopEnemies:
+            // Only a client takes enemy positions, and only from its host.
+            if (g_role == NetRole::Client && transport::SameAddr(from, g_hostAddr))
+                coop::enemies::OnHostState(body, bodyLen);
+            break;
+        case NetPacketType::CoopAlive:
+            if (g_role == NetRole::Client && transport::SameAddr(from, g_hostAddr))
+                coop::enemies::OnHostAlive(body, bodyLen);
+            break;
         default: break;
         }
     }
+
+    // Co-op: host -> every connected partner, unreliable (newest packet wins).
+    static void SendCoopToPeers(NetPacketType type, const void* payload, size_t len)
+    {
+        if (g_role != NetRole::Host) return;
+        for (int s = 0; s < kMaxNetPlayers; s++) {
+            NetPeer& peer = g_peers[s];
+            if (!peer.active) continue;
+            SendRaw(peer, type, static_cast<uint8_t>(g_mySlot), 0, payload, len);
+        }
+    }
+    void SendCoopEnemies(const void* payload, size_t len) { SendCoopToPeers(NetPacketType::CoopEnemies, payload, len); }
+    void SendCoopAlive(const void* payload, size_t len)   { SendCoopToPeers(NetPacketType::CoopAlive, payload, len); }
 
 
     static constexpr uint32_t kEvtRingCap   = 256; // power of two, far past worst case

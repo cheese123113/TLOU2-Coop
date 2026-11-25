@@ -14,6 +14,8 @@ namespace net::session {
     void HostGame();
     void JoinGame(const char* hostIP);
     void JoinGameSteam(uint64_t hostSteamId);   // co-op: join a Steam friend (no IP, no port forwarding)
+    void SendCoopEnemies(const void* payload, size_t len);   // co-op: host -> partners, unreliable
+    void SendCoopAlive(const void* payload, size_t len);     // co-op: host -> partners, living-enemy snapshot
 
     void HostGameRelay(const char* relayIp, uint16_t relayPort, uint32_t sessionId);
     void JoinGameRelay(const char* relayIp, uint16_t relayPort, uint32_t sessionId, uint8_t mySlot);
