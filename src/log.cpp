@@ -24,6 +24,12 @@ namespace to1log {
 			if (!slash) return;
 			slash[1] = 0;
 			strcat_s(path, "tlou2-coop.log");
+			// Keep the previous game session's log as tlou2-coop.prev.log, so restarting the game
+			// (to check a save, after a crash) does not wipe what happened before.
+			char prev[MAX_PATH];
+			strcpy_s(prev, path);
+			strcpy_s(prev + (slash + 1 - path), MAX_PATH - (slash + 1 - path), "tlou2-coop.prev.log");
+			MoveFileExA(path, prev, MOVEFILE_REPLACE_EXISTING);
 			s_file = _fsopen(path, "w", _SH_DENYWR);
 		}
 	}

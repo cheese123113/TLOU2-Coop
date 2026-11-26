@@ -1141,6 +1141,109 @@ namespace coop {
             }
         }
 
+        // ---------------------------------------------------------------- No Return discovery (NR1)
+        // The game world of the current task ([[task]+0x120]+0x18): "world-rogue" in No Return.
+        StringId64 CurrentWorld()
+        {
+            const uintptr_t t = static_cast<uintptr_t>(DC::Call<"task-get-current">());
+            if (!PlausiblePtr(t)) return 0;
+            const uintptr_t node = ReadPtr(t + 0x120);
+            uint64_t w = 0;
+            return (node && SafeRead(node + 0x18, &w, 8)) ? w : 0;
+        }
+
+        // The exe's executable section: a script symbol whose function slot points in here is a
+        // native (C++) script function, callable like DC::Call does.
+        bool InExeCode(uintptr_t a)
+        {
+            static uintptr_t lo = 0, hi = 0;
+            if (!lo) {
+                const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(g_base);
+                const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(g_base + dos->e_lfanew);
+                const IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt);
+                for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i)
+                    if (sec[i].Characteristics & IMAGE_SCN_MEM_EXECUTE) {
+                        lo = g_base + sec[i].VirtualAddress;
+                        hi = lo + sec[i].Misc.VirtualSize;
+                        break;
+                    }
+            }
+            return a >= lo && a < hi;
+        }
+
+        // The function slot of a script symbol (0 if the symbol does not exist).
+        uintptr_t ScriptFunctionSlot(StringId64 sid)
+        {
+            const DcValue* v = DcManager::Lookup(sid);
+            uint64_t f = 0;
+            if (!v || !SafeRead(reinterpret_cast<uintptr_t>(&v->val[SCRIPT_FUNC_INDEX]), &f, 8)) return 0;
+            return f ? f : 1;                              // exists, but no function in that slot
+        }
+
+        constexpr const char* kNoReturnNames[] = {
+#include "coop/nr-names.inc"
+        };
+
+        // Questions about the run that take no arguments, asked once a second in No Return and
+        // logged when the answer changes: what an encounter / the hideout / a run end look like.
+        constexpr const char* kNoReturnWatch[] = {
+            "in-rogue-mode?", "is-rogue-mode?", "is-rogue-like?", "rogue-player-loaded?", "rogue-player-set?",
+            "rogue-player-in-hub?", "rogue-player-in-encounter?", "rogue-run-abandoned?",
+            "is-rogue-in-post-encounter-flow?", "is-rogue-hub-waiting-on-post-encounter-flow?",
+            "is-encounter-select?", "is-encounter-restart?", "is-boss-encounter?", "is-defense-encounter?",
+            "is-human-faction-encounter?", "is-infected-faction-encounter?", "encounter-over?", "failed-encounter?",
+            "defense-wave-active?", "assault-wave-active?", "last-npc-in-rogue-wave?", "is-speed-run-mode-enabled?",
+        };
+
+        void TickNoReturnProbe()
+        {
+            // Once per game session: which of the No Return names are native script functions.
+            static bool scanned = false;
+            if (!scanned) {
+                scanned = true;
+                int natives = 0, others = 0;
+                TO1_LOG("[nr] ===== No Return name scan: %zu names =====\n", std::size(kNoReturnNames));
+                for (const char* n : kNoReturnNames) {
+                    const uintptr_t f = ScriptFunctionSlot(ToStringId64(n));
+                    if (!f) continue;
+                    if (InExeCode(f)) {
+                        ++natives;
+                        TO1_LOG("[nr] native %s  exe+%llX\n", n, static_cast<unsigned long long>(f - g_base));
+                    }
+                    else {
+                        ++others;
+                        TO1_LOG("[nr] symbol %s  (%016llX)\n", n, static_cast<unsigned long long>(f));
+                    }
+                }
+                TO1_LOG("[nr] ===== %d native functions, %d other symbols =====\n", natives, others);
+            }
+
+            // The watch list: natives only (a script-defined function cannot be called this way).
+            struct Watch { const char* name; uintptr_t fn; uint64_t last; bool called; };
+            static std::vector<Watch> watch;
+            static bool built = false;
+            if (!built) {
+                built = true;
+                for (const char* n : kNoReturnWatch) {
+                    const uintptr_t f = ScriptFunctionSlot(ToStringId64(n));
+                    if (f && InExeCode(f)) watch.push_back({ n, f, 0, false });
+                    else TO1_LOG("[nr] watch: %s is not a native, skipped\n", n);
+                }
+            }
+            using NativeFn = DcValue (*)(int, DcValue*, uint64_t);
+            for (Watch& w : watch) {
+                // The first call of each is logged first: if one of them crashes the game, the
+                // log's last line names it.
+                if (!w.called) TO1_LOG("[nr] first call: %s\n", w.name);
+                DcValue args{};
+                const uint64_t v = reinterpret_cast<NativeFn>(w.fn)(0, &args, 0).val[0];
+                if (!w.called || v != w.last)
+                    TO1_LOG("[nr] %s = %llX\n", w.name, static_cast<unsigned long long>(v));
+                w.called = true;
+                w.last = v;
+            }
+        }
+
         // Where the game is, in the log whenever it changes (campaign chapter part / task, No
         // Return hideout / encounter): one line per change, plus the task object's names when
         // the part (node) changes. Cheap (one script call a second), runs solo too -- it is
@@ -1154,16 +1257,18 @@ namespace coop {
             if (!ENTITY::DOES_EXIST(SID("player"))) return;
             TaskId cur;
             if (!CurrentTask(cur)) return;
+            const bool noReturn = CurrentWorld() == SID("world-rogue");
+            if (noReturn) TickNoReturnProbe();
             if (cur.node == last.node && cur.task == last.task && cur.day == last.day) return;
             const bool newNode = cur.node != last.node;
             last = cur;
             auto name = [](StringId64 s) { const char* n = SidName(s); return n ? n : "?"; };
-            TO1_LOG("[where] node %016llX \"%s\"  task %016llX \"%s\"  day %016llX \"%s\"  difficulty %llu\n",
+            TO1_LOG("[where] node %016llX \"%s\"  task %016llX \"%s\"  day %016llX \"%s\"  difficulty %llu%s\n",
                 static_cast<unsigned long long>(cur.node), name(cur.node),
                 static_cast<unsigned long long>(cur.task), name(cur.task),
                 static_cast<unsigned long long>(cur.day), name(cur.day),
-                static_cast<unsigned long long>(DC::Call<"get-difficulty">()));
-            if (newNode) ProbeTask();
+                static_cast<unsigned long long>(DC::Call<"get-difficulty">()), noReturn ? "  [No Return]" : "");
+            if (newNode || noReturn) ProbeTask();          // No Return: every task (hideout, each encounter)
         }
 
         // Name tags: the partner's name centred 2.1 m above its puppet. Screen space is the
