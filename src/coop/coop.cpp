@@ -28,6 +28,7 @@
 #include <atomic>
 #include <algorithm>
 #include <cmath>
+#include <intrin.h>   // _ReturnAddress
 
 extern bool multiplayer;   // match.cpp: gates the session/replication half of NetTick
 
@@ -44,6 +45,7 @@ namespace coop {
             bool overlay = true;
             bool nametags = true;               // partner name above their character
             bool friendlyFire = false;          // players' bullets hurt each other (the host's setting counts)
+            uint32_t nrSeed = 0;                // test only: No Return seed to force (nr_seed=<hex>), 0 = off
         };
         Config g_cfg;
         std::atomic<bool> g_hostFriendlyFire{ false };   // guest: the host's setting (NEVT_COOP_WHERE)
@@ -112,6 +114,7 @@ namespace coop {
                 else if (key == "overlay")                g_cfg.overlay = (val != "0");
                 else if (key == "nametags")               g_cfg.nametags = (val != "0");
                 else if (key == "friendlyfire")           g_cfg.friendlyFire = (val == "1");
+                else if (key == "nr_seed")                g_cfg.nrSeed = static_cast<uint32_t>(strtoul(val.c_str(), nullptr, 16));
                 else if (key == "spawner") {
                     size_t start = 0;
                     while (start <= val.size()) {
@@ -607,6 +610,54 @@ namespace coop {
             }
             g_hkSaveRequest = safetyhook::create_inline(reinterpret_cast<void*>(f), reinterpret_cast<void*>(hk_SaveRequest));
             TO1_LOG("[coop] save block hook %s\n", g_hkSaveRequest ? "installed" : "FAILED");
+        }
+
+        // ---------------------------------------------------------------- No Return seed (NR1c)
+        // The run's random numbers come from one state object (exe 0x144162cd0, build 4188655):
+        // the primary seed sits at +0x72CC (rogue-get-primary-seed reads it, unless a custom
+        // run's override seed is active), and per-category generators (0x150-byte entries at
+        // +0x72F0, count +0x7300) are seeded from it. Both setters below are what the
+        // rogue-set-prng-seed / rogue-set-prng-category-seed natives call.
+        //  - Every call is logged with the caller, to see when a new run picks its seed.
+        //  - nr_seed=<hex> in tlou2-coop.ini (test only) replaces the seed the game sets: does
+        //    the same seed give the same encounter board and factions? (co-op idea: the joined
+        //    player's run uses the host's seed)
+        constexpr uint32_t kRvaRogueSetSeed = 0x104BF60;           // (state*, u32 seed)
+        constexpr uint32_t kRvaRogueSetCategorySeed = 0x104BE60;   // (state*, u64 category, u32 seed)
+        SafetyHookInline g_hkRogueSetSeed, g_hkRogueSetCategorySeed;
+        std::atomic<int> g_seedLogs{ 0 }, g_catLogs{ 0 };
+
+        uint64_t __fastcall hk_RogueSetSeed(uintptr_t state, uint32_t seed)
+        {
+            const unsigned long long caller = reinterpret_cast<uintptr_t>(_ReturnAddress()) - g_base;
+            const uint32_t use = g_cfg.nrSeed ? g_cfg.nrSeed : seed;
+            if (g_seedLogs.fetch_add(1) < 60) {
+                if (use != seed) TO1_LOG("[nr] seed set %08X -> replaced by nr_seed %08X (from exe+%llX)\n", seed, use, caller);
+                else TO1_LOG("[nr] seed set %08X (from exe+%llX)\n", seed, caller);
+            }
+            return g_hkRogueSetSeed.unsafe_fastcall<uint64_t>(state, use);
+        }
+
+        uint64_t __fastcall hk_RogueSetCategorySeed(uintptr_t state, uint64_t category, uint32_t seed)
+        {
+            if (g_catLogs.fetch_add(1) < 200)
+                TO1_LOG("[nr] category seed %016llX = %08X (from exe+%llX)\n", static_cast<unsigned long long>(category), seed,
+                    static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(_ReturnAddress()) - g_base));
+            return g_hkRogueSetCategorySeed.unsafe_fastcall<uint64_t>(state, category, seed);
+        }
+
+        void InstallRogueSeedHooks()
+        {
+            static const uint8_t kSeed[10] = { 0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20 };
+            static const uint8_t kCat[15] = { 0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x30 };
+            const uintptr_t s = g_base + kRvaRogueSetSeed, c = g_base + kRvaRogueSetCategorySeed;
+            if (Readable(s, sizeof(kSeed)) && memcmp(reinterpret_cast<const void*>(s), kSeed, sizeof(kSeed)) == 0)
+                g_hkRogueSetSeed = safetyhook::create_inline(reinterpret_cast<void*>(s), reinterpret_cast<void*>(hk_RogueSetSeed));
+            if (Readable(c, sizeof(kCat)) && memcmp(reinterpret_cast<const void*>(c), kCat, sizeof(kCat)) == 0)
+                g_hkRogueSetCategorySeed = safetyhook::create_inline(reinterpret_cast<void*>(c), reinterpret_cast<void*>(hk_RogueSetCategorySeed));
+            TO1_LOG("[nr] seed hooks: primary %s, category %s; nr_seed %s%08X\n",
+                g_hkRogueSetSeed ? "installed" : "NOT installed", g_hkRogueSetCategorySeed ? "installed" : "NOT installed",
+                g_cfg.nrSeed ? "= " : "off ", g_cfg.nrSeed);
         }
 
         // ---------------------------------------------------------------- session control
@@ -1355,6 +1406,7 @@ namespace coop {
             LoadConfig();
             InstallLevelMgrCapture();
             InstallSaveBlock();
+            InstallRogueSeedHooks();
             TO1_LOG("[coop] ready. F7 host, F8 join, F6 leave, F9 discovery probe\n");
         }
 

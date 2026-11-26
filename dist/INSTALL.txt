@@ -1,4 +1,4 @@
-TLOU2 Campaign Co-op - test build (M3.5)
+TLOU2 Campaign Co-op - test build (M3.6)
 Fan project, built on the Twelve Weeks client (GPL-3.0). Needs The Last of Us Part II Remastered on Steam.
 
 INSTALL
