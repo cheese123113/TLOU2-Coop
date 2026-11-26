@@ -1193,7 +1193,17 @@ namespace coop {
             "is-encounter-select?", "is-encounter-restart?", "is-boss-encounter?", "is-defense-encounter?",
             "is-human-faction-encounter?", "is-infected-faction-encounter?", "encounter-over?", "failed-encounter?",
             "defense-wave-active?", "assault-wave-active?", "last-npc-in-rogue-wave?", "is-speed-run-mode-enabled?",
+            // NR1b: the run itself -- seeds, character, layout (natives found by the M3.4 scan).
+            // Values that are string ids are logged with their names.
+            "rogue-get-primary-seed", "rogue-get-daily-run-seed", "custom-run--using-override-seed?",
+            "rogue-get-player-character", "rogue-get-player-character-look", "rogue-get-most-recent-character",
+            "rogue-get-overall-mode", "rogue-get-hub-node", "rogue-get-hub-subnode", "rogue-get-is-resumed-run",
+            "rogue-get-run-template", "rogue-get-run-structure", "rogue-get-custom-run", "get-speed-run-mode",
+            "task-played-from-encounter-selection?",
         };
+
+        // The last No Return encounter seen this session (Shift+F11 loads it from the hideout).
+        TaskId g_lastEncounter{};
 
         void TickNoReturnProbe()
         {
@@ -1219,14 +1229,14 @@ namespace coop {
             }
 
             // The watch list: natives only (a script-defined function cannot be called this way).
-            struct Watch { const char* name; uintptr_t fn; uint64_t last; bool called; };
+            struct Watch { const char* name; uintptr_t fn; uint64_t last; bool called; int logs; };
             static std::vector<Watch> watch;
             static bool built = false;
             if (!built) {
                 built = true;
                 for (const char* n : kNoReturnWatch) {
                     const uintptr_t f = ScriptFunctionSlot(ToStringId64(n));
-                    if (f && InExeCode(f)) watch.push_back({ n, f, 0, false });
+                    if (f && InExeCode(f)) watch.push_back({ n, f, 0, false, 0 });
                     else TO1_LOG("[nr] watch: %s is not a native, skipped\n", n);
                 }
             }
@@ -1237,8 +1247,14 @@ namespace coop {
                 if (!w.called) TO1_LOG("[nr] first call: %s\n", w.name);
                 DcValue args{};
                 const uint64_t v = reinterpret_cast<NativeFn>(w.fn)(0, &args, 0).val[0];
-                if (!w.called || v != w.last)
-                    TO1_LOG("[nr] %s = %llX\n", w.name, static_cast<unsigned long long>(v));
+                // (at most 12 changes each: a value that is a fresh pointer every call would
+                // flood the log)
+                if ((!w.called || v != w.last) && w.logs < 12) {
+                    ++w.logs;
+                    const char* n = SidName(v);
+                    TO1_LOG("[nr] %s = %llX%s%s%s%s\n", w.name, static_cast<unsigned long long>(v),
+                        n ? " \"" : "", n ? n : "", n ? "\"" : "", w.logs == 12 ? "  (no more changes logged)" : "");
+                }
                 w.called = true;
                 w.last = v;
             }
@@ -1269,6 +1285,7 @@ namespace coop {
                 static_cast<unsigned long long>(cur.day), name(cur.day),
                 static_cast<unsigned long long>(DC::Call<"get-difficulty">()), noReturn ? "  [No Return]" : "");
             if (newNode || noReturn) ProbeTask();          // No Return: every task (hideout, each encounter)
+            if (noReturn && cur.node != SID("t2r-hub-proto")) g_lastEncounter = cur;
         }
 
         // Name tags: the partner's name centred 2.1 m above its puppet. Screen space is the
@@ -1368,7 +1385,23 @@ namespace coop {
                 }
                 else ProbeAroundPlayer();
             }
-            if (Pressed(VK_F11)) {
+            if (Pressed(VK_F11) && (GetAsyncKeyState(VK_SHIFT) & 0x8000)) {
+                // Shift+F11 (No Return test): from the hideout, load the last encounter played
+                // this session through task-play-debug! -- what a joining partner's game would
+                // do to follow the host into an encounter.
+                TaskId cur;
+                if (CurrentWorld() != SID("world-rogue")) Flash("Shift+F11: No Return only");
+                else if (!g_lastEncounter.task) Flash("Shift+F11: play one encounter first, then come back to the hideout");
+                else if (!CurrentTask(cur) || cur.node != SID("t2r-hub-proto")) Flash("Shift+F11: go back to the hideout first");
+                else {
+                    TO1_LOG("[nr] Shift+F11: loading the last encounter %016llX \"%s\" / %016llX \"%s\" from the hideout\n",
+                        static_cast<unsigned long long>(g_lastEncounter.node), SidName(g_lastEncounter.node) ? SidName(g_lastEncounter.node) : "?",
+                        static_cast<unsigned long long>(g_lastEncounter.task), SidName(g_lastEncounter.task) ? SidName(g_lastEncounter.task) : "?");
+                    Flash("Shift+F11: loading the last encounter (No Return join test)");
+                    DEBUG::PLAY_TASK(g_lastEncounter.node, g_lastEncounter.task, 0);
+                }
+            }
+            else if (Pressed(VK_F11)) {
                 if (!g_testPuppet || !ENTITY::DOES_EXIST(g_testPuppet)) Flash("F11: press F10 first to spawn the test Ellie");
                 else if (g_sweepIdx < 0) { TO1_LOG("[movetest] sweep start\n"); g_sweepIdx = 0; StartMoveVariant(0); }
             }
