@@ -551,8 +551,26 @@ namespace coop::enemies {
         if (!best) { TO1_LOG("[enemies] Shift+F6: no living enemy within 15 m\n"); return; }
         const uintptr_t from = (testPuppet && ENTITY::DOES_EXIST(testPuppet))
             ? static_cast<uintptr_t>(DcManager::LookupObject(testPuppet)) : 0;
-        const float h = ENTITY::GET_HEALTH(best);
-        ApplyHitWithReaction(best, (std::max)(h - 20.0f, 1.0f), from, "Shift+F6 test");
+        const uintptr_t target = static_cast<uintptr_t>(DcManager::LookupObject(best));
+        const uintptr_t player = static_cast<uintptr_t>(DcManager::LookupObject(SID("player")));
+        if (!target || !player) return;
+
+        // Each press tries the next attack layout (1 -> 2 -> 3 -> 1 ...) and logs whether the
+        // enemy accepted it and whether its health actually dropped (10 damage).
+        static int variant = 0;
+        variant = variant % 3 + 1;
+        uint64_t weapon = net::engine::GetPlayerWeaponId(player);
+        if (!weapon) weapon = SID("pistol-beretta");
+        const float before = ENTITY::GET_HEALTH(best);
+        TO1_LOG("[enemies] Shift+F6: trying attack layout %d on %016llX (health %.1f)\n", variant,
+            static_cast<unsigned long long>(best), before);
+        net::hooks::AllowReplayDamage(true);
+        const bool accepted = net::engine::FireAttackVariant(variant, target, player, from, weapon, 10.0f);
+        net::hooks::AllowReplayDamage(false);
+        const float after = ENTITY::GET_HEALTH(best);
+        TO1_LOG("[enemies] Shift+F6: layout %d %s, health %.1f -> %.1f%s\n", variant,
+            accepted ? "ACCEPTED" : "rejected", before, after, IsDead(best) ? " (dead)" : "");
+        if (!accepted && after >= before) DC::Call<"npc-flinch">(best);
         g_known[best].health = ENTITY::GET_HEALTH(best);   // not reported to a partner as our own hit
     }
 
