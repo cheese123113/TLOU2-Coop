@@ -1337,6 +1337,45 @@ namespace net::hooks {
         g_hkBulletHit.fastcall<void>(ctx, victim, attackInfo, flags);
     }
 
+    // Melee probe: the first few real melee attacks (attack kind 1) the local player lands are
+    // dumped to the log -- every non-zero qword of the attack info -- to learn what a melee
+    // attack carries beyond what FireAttackEx fills in. Our own replayed attacks are skipped.
+    static SafetyHookInline g_hkMeleeProbe;
+    static std::atomic<int> g_meleeProbeLogs{ 0 };
+    static __int64 __fastcall hk_MeleeProbe(uintptr_t ai, uintptr_t victim)
+    {
+        if (ai && victim && !g_allowReplayDamage.load(std::memory_order_relaxed)) {
+            __try {
+                const uint32_t kind = *reinterpret_cast<const uint32_t*>(ai + 0x18);
+                const uintptr_t local = NetPlayers::LocalPtr();
+                if (kind == 1 && local && AttackerFromAttackInfo(ai) == local && g_meleeProbeLogs.fetch_add(1) < 3) {
+                    TO1_LOG("[melee-probe] local melee attack on %llx: damage %.1f weapon %016llX\n",
+                        static_cast<unsigned long long>(victim), *reinterpret_cast<const float*>(ai + 0x40),
+                        *reinterpret_cast<const unsigned long long*>(ai + 0x20));
+                    char line[256]; int k = 0;
+                    for (uint32_t off = 0; off < 2700 - 8; off += 8) {
+                        const unsigned long long q = *reinterpret_cast<const unsigned long long*>(ai + off);
+                        if (!q) continue;
+                        k += snprintf(line + k, sizeof(line) - k, " %03X=%llX", off, q);
+                        if (k > 200) { TO1_LOG("[melee-probe] %s\n", line); k = 0; }
+                    }
+                    if (k) TO1_LOG("[melee-probe] %s\n", line);
+                }
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {}
+        }
+        return g_hkMeleeProbe.fastcall<__int64>(ai, victim);
+    }
+
+    void InstallMeleeProbe()
+    {
+        static bool done = false;
+        if (done) return;
+        done = true;
+        g_hkMeleeProbe = safetyhook::create_inline(reinterpret_cast<void*>(g_base + 0x395360), reinterpret_cast<void*>(hk_MeleeProbe));
+        TO1_LOG("[melee-probe] attack dispatch hook %s\n", g_hkMeleeProbe ? "installed" : "FAILED");
+    }
+
     void InstallCoopHooks()
     {
         if (g_installed) return;

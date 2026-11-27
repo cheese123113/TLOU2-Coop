@@ -18,6 +18,10 @@ namespace net::engine {
     StringId64 GetMeleeAction(uintptr_t player);       // current melee action SID
 
     bool FireAttack(uintptr_t target, uintptr_t attacker, uint64_t weapon, uint64_t ammo, float damage, bool headshot = false);
+    // Co-op: an attack of `kind` (0 bullet, 1 melee -- attackInfo+0x18) credited to `identity`
+    // (the engine accepts it from the player; an NPC puppet of the enemy's faction is refused),
+    // coming from `posSource`'s position (the partner's puppet: the enemy reacts towards it).
+    bool FireAttackEx(uintptr_t target, uintptr_t identity, uintptr_t posSource, uint64_t weapon, float damage, int kind);
 
     constexpr uint32_t kStateDescDeath = 0x35BD410;
 

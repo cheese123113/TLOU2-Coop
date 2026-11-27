@@ -108,20 +108,27 @@ namespace coop::enemies {
             const uintptr_t target = static_cast<uintptr_t>(DcManager::LookupObject(npc));
             const uintptr_t player = static_cast<uintptr_t>(DcManager::LookupObject(SID("player")));
             bool reacted = false;
+            const char* how = "flinch";
+            if (!attacker) attacker = player;              // no puppet: the hit comes from us
             if (target && attacker && player && local > 1.0f) {
                 uint64_t weapon = net::engine::GetPlayerWeaponId(player);
                 if (!weapon) weapon = SID("pistol-beretta");
                 // small damage: enough for the hit reaction, never a kill (difficulty scales
                 // it); the real health is set right after
                 const float dmg = (std::min)({ local - newHealth, 10.0f, local - 1.0f });
+                // Credited to our player (an attack from the partner's puppet -- an NPC that
+                // borrowed an enemy spawner -- counts as friendly and is refused), placed at the
+                // partner so the enemy reacts towards them. Melee first, bullet as fallback.
                 net::hooks::AllowReplayDamage(true);
-                reacted = net::engine::FireAttack(target, attacker, weapon, 0, (std::max)(dmg, 0.5f));
+                reacted = net::engine::FireAttackEx(target, player, attacker, weapon, (std::max)(dmg, 0.5f), 1);
+                if (reacted) how = "melee hit reaction";
+                else if (net::engine::FireAttackEx(target, player, attacker, weapon, (std::max)(dmg, 0.5f), 0)) { reacted = true; how = "bullet hit reaction"; }
                 net::hooks::AllowReplayDamage(false);
             }
             if (!reacted) DC::Call<"npc-flinch">(npc);
             if (!IsDead(npc)) ENTITY::SET_HEALTH(npc, newHealth);
             TO1_LOG("[enemies] %s hit %016llX: %.1f -> %.1f, %s\n", who, static_cast<unsigned long long>(npc),
-                local, newHealth, reacted ? "hit reaction" : "flinch");
+                local, newHealth, how);
         }
 
         void TickDamage(float dt)

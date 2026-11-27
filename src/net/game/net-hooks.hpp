@@ -5,7 +5,8 @@
 namespace net::hooks {
 
 	void InstallMultiplayerHooks();
-	void AllowReplayDamage(bool on);  // co-op: let our own replayed hit through the puppet-attacker zeroing
+	void AllowReplayDamage(bool on);
+	void InstallMeleeProbe();       // co-op: log the first real melee attacks the local player lands (layout discovery)  // co-op: let our own replayed hit through the puppet-attacker zeroing
 	void InstallCoopHooks();        // co-op: puppet guards only (removed by RemoveMultiplayerHooks)
 	void RemoveMultiplayerHooks();
 

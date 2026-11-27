@@ -1407,6 +1407,7 @@ namespace coop {
             InstallLevelMgrCapture();
             InstallSaveBlock();
             InstallRogueSeedHooks();
+            net::hooks::InstallMeleeProbe();
             TO1_LOG("[coop] ready. F7 host, F8 join, F6 leave, F9 discovery probe\n");
         }
 

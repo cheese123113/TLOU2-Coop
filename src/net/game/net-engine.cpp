@@ -167,6 +167,35 @@ namespace net::engine {
         return result != 0;
     }
 
+    bool FireAttackEx(uintptr_t target, uintptr_t identity, uintptr_t posSource, uint64_t weapon, float damage, int kind)
+    {
+        if (!target || !identity) return false;
+        if (!posSource) posSource = identity;
+
+        auto ctor = (uintptr_t(__fastcall*)(uintptr_t, int))(g_base + 0x394C10);
+        auto fire = (uint8_t(__fastcall*)(uintptr_t, uintptr_t))(g_base + 0x395360);
+
+        uint8_t* ai = (uint8_t*)calloc(1, 2700);
+        ctor((uintptr_t)ai, kind);   // sets the attack kind at +0x18
+
+        *(uintptr_t*)(ai + 8) = *(uintptr_t*)(identity + 128);   // attacker handle
+        *(uint32_t*)(ai + 16) = *(uint32_t*)(identity + 148);    // attacker instance
+        *(uint64_t*)(ai + 32) = weapon;
+        *(float*)(ai + 64) = damage;
+        memcpy(ai + 272, (void*)(target + 256), 80);
+        memcpy(ai + 2272, (void*)(target + 256), 80);
+        memcpy(ai + 2384, (void*)(posSource + 256), 80);         // where the hit comes from
+        *(uint32_t*)(ai + 2464) = kind == 0 ? 1 : 0;             // projectile type (bullets only)
+        *(uint64_t*)(ai + 2472) = weapon;
+
+        uint8_t result = 0;
+        __try { result = fire((uintptr_t)ai, target); }
+        __except (EXCEPTION_EXECUTE_HANDLER) {}
+
+        free(ai);
+        return result != 0;
+    }
+
     // Fix for puppet weapon in hands
 
     float GetWeaponIkFade(uintptr_t player)
