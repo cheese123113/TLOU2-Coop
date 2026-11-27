@@ -13,21 +13,10 @@
 
 #include "engine/patterns.hpp"
 
+// A failed startup assertion (always_assert_ has logged and shown it) ends the game cleanly.
+// (Twelve Weeks hung the game forever here unless a debugger was attached.)
 #if NDEBUG
-#define BREAK()\
-{ \
-    if (!IsDebuggerPresent()) \
-    { \
-        while (true) \
-        { \
-            Sleep(1000); \
-        } \
-    } \
-    else \
-    { \
-        __debugbreak(); \
-    } \
-}
+#define BREAK() __fastfail(7 /* FAST_FAIL_FATAL_APP_EXIT */);
 #else
 #define BREAK() __debugbreak();
 #endif

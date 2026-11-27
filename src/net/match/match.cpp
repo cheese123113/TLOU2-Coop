@@ -4,8 +4,6 @@
 #include "net-session.hpp"
 #include "net-replication.hpp"
 #include "net-matchmaking.hpp"
-#include "net-relayping.hpp"
-#include "net-tamper.hpp"
 #include "net-config.hpp"
 #include "net-gui2.hpp"
 #include "net-hooks.hpp"

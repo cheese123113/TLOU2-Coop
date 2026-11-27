@@ -114,6 +114,13 @@ Weeks') into `tlou2-coop-backup\` first; `uninstall.ps1` puts it back. Unlike Tw
 ## What changed from the Twelve Weeks client
 
 - No embedded archive, mod-menu level, matchmaking server, relay, tamper reports or hardware id.
+  Since M3.7 that code is out of the build entirely: the anti-debugging checks, hardware-id
+  collection, tamper reporting, relay ping, server connection/config fetch, account token and
+  the multiplayer menu (with its "open the website" shell command) are deleted, and the few
+  interfaces the remaining code still calls are inert stubs. A failed startup check now exits
+  cleanly instead of hanging the game unless a debugger is attached. (Windows Defender's
+  machine-learning scan flagged earlier builds as `Trojan:Script/Wacatac.H!ml`, a false
+  positive caused by these patterns.)
 - Saves, profile and player stats load normally (Twelve Weeks swaps them for its MP mode).
 - Steam peer-to-peer transport (`src/net/online/net-steam.cpp`) through the game's own
   `steam_api64.dll`, with a friends-only "who is hosting" lookup.
