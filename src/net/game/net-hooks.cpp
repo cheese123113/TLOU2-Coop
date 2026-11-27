@@ -1316,6 +1316,9 @@ namespace net::hooks {
     // -> npc-fire-weapon) so it is seen and heard. Those bullets are real in this world, but the
     // damage they stand for is already synced by the shooter's own game (enemy sync / hurt
     // events), so a bullet whose attacker is a puppet lands with 0 damage: impact FX, no hit.
+    static std::atomic<bool> g_allowReplayDamage{ false };
+    void AllowReplayDamage(bool on) { g_allowReplayDamage.store(on, std::memory_order_relaxed); }
+
     static void __fastcall hk_CoopBulletHit(uintptr_t ctx, uintptr_t victim, uintptr_t attackInfo, char flags)
     {
         if (attackInfo && net::session::IsConnected()) {
@@ -1326,7 +1329,7 @@ namespace net::hooks {
             // no damage, so no hurt event is sent to the partner
             const bool friendly = attacker && victim && attacker == NetPlayers::LocalPtr() && RemoteByPtr(victim)
                 && !coop::FriendlyFire();
-            if (replayed || friendly) {
+            if ((replayed && !g_allowReplayDamage.load(std::memory_order_relaxed)) || friendly) {
                 __try { *reinterpret_cast<float*>(attackInfo + 64) = 0.0f; }   // AttackInfo damage
                 __except (EXCEPTION_EXECUTE_HANDLER) {}
             }

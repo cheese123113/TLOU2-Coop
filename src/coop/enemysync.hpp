@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "sid/sid.hpp"
+
 // M2: shared enemies.
 //  - Damage / deaths both ways (NEVT_COOP_ENEMY, see net-protocol.hpp).
 //  - Positions from the host (NetPacketType::CoopEnemies): on the partner every enemy the host
@@ -16,6 +18,11 @@ namespace coop::enemies {
     void SendAliveSnapshot();                              // host: every enemy alive here -> partners
     void NoteShot(uint32_t shooterId);                     // host, from the shot hook (any thread): an enemy fired
     void OnEnemyFire(uint8_t senderSlot, const uint8_t* data, uint8_t size);   // partner: copy fires
+
+    // Partner hit reactions: a partner's gunshot / arrow arrived (its replay already makes the
+    // enemy react); any other partner hit is replayed with a hit reaction. Shift+F6 tests it solo.
+    void NotePartnerShot(uint8_t senderSlot);
+    void TestPartnerHit(StringId64 testPuppet);
     void Reset();                                          // session start / end
 
     // Engine-thread safe: is this process one of our followers? (root-locator guard)

@@ -1421,7 +1421,16 @@ namespace coop {
                     StartSession(Want::Host);
             }
             if (Pressed(VK_F8)) StartSession(Want::Join);
-            if (Pressed(VK_F6)) StopSession();
+            if (Pressed(VK_F6)) {
+                // Shift+F6 (solo test): the nearest enemy takes a "partner melee hit" from the F10
+                // test Ellie, through the path a real partner's melee hit takes.
+                if ((GetAsyncKeyState(VK_SHIFT) & 0x8000) && ENTITY::DOES_EXIST(SID("player"))) {
+                    Flash(g_testPuppet ? "Shift+F6: partner melee hit test on the nearest enemy"
+                                       : "Shift+F6: hit test (press F10 first so the hit comes from the test Ellie)");
+                    coop::enemies::TestPartnerHit(g_testPuppet);
+                }
+                else StopSession();
+            }
             if (Pressed(VK_F9) && ENTITY::DOES_EXIST(SID("player"))) {
                 if (GetAsyncKeyState(VK_SHIFT) & 0x8000) {
                     // Shift+F9: reload the current task through task-play-debug! -- the exact

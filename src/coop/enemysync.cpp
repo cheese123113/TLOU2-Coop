@@ -8,6 +8,7 @@
 #include "log.hpp"
 #include "engine/structs.hpp"
 #include "coop/coop.hpp"
+#include "net-hooks.hpp"
 
 #include <array>
 #include <atomic>
@@ -79,6 +80,48 @@ namespace coop::enemies {
                 how = killed ? "npc-die" : "health set to 0 (npc-die did not take)";
             }
             TO1_LOG("[enemies] partner killed %016llX -> %s\n", static_cast<unsigned long long>(npc), how);
+        }
+
+        // ------------------------------------------------------------------ partner hit reactions
+        // A partner's hit used to only lower our copy's health, so an enemy being meleed stood
+        // still until the killing blow. Gunshots and arrows need nothing more: the partner's
+        // puppet replays them here and the replayed bullet / arrow already makes the enemy
+        // react (with 0 damage). Everything else -- melee, explosions, thrown items -- is
+        // replayed through the engine's own damage path, from the partner's character, so the
+        // enemy plays a real hit reaction and turns on them; then the exact health is set.
+        std::array<float, kMaxNetPlayers> g_lastPartnerShot{};   // per slot, g_clock
+        float g_clock = 0.0f;                              // seconds, advanced by Tick (also followers)
+        constexpr float kShotWindow = 0.75f;               // a hit this soon after a shot was the shot
+
+        uintptr_t PuppetOf(uint8_t slot)
+        {
+            for (NetPlayer& p : NetPlayers::Remotes())
+                if (p.netSlot == slot && p.npcSid && ENTITY::DOES_EXIST(p.npcSid))
+                    return static_cast<uintptr_t>(DcManager::LookupObject(p.npcSid));
+            return 0;
+        }
+
+        // `attacker` = who the enemy should react to (0: just a flinch).
+        void ApplyHitWithReaction(StringId64 npc, float newHealth, uintptr_t attacker, const char* who)
+        {
+            const float local = ENTITY::GET_HEALTH(npc);
+            const uintptr_t target = static_cast<uintptr_t>(DcManager::LookupObject(npc));
+            const uintptr_t player = static_cast<uintptr_t>(DcManager::LookupObject(SID("player")));
+            bool reacted = false;
+            if (target && attacker && player && local > 1.0f) {
+                uint64_t weapon = net::engine::GetPlayerWeaponId(player);
+                if (!weapon) weapon = SID("pistol-beretta");
+                // small damage: enough for the hit reaction, never a kill (difficulty scales
+                // it); the real health is set right after
+                const float dmg = (std::min)({ local - newHealth, 10.0f, local - 1.0f });
+                net::hooks::AllowReplayDamage(true);
+                reacted = net::engine::FireAttack(target, attacker, weapon, 0, (std::max)(dmg, 0.5f));
+                net::hooks::AllowReplayDamage(false);
+            }
+            if (!reacted) DC::Call<"npc-flinch">(npc);
+            if (!IsDead(npc)) ENTITY::SET_HEALTH(npc, newHealth);
+            TO1_LOG("[enemies] %s hit %016llX: %.1f -> %.1f, %s\n", who, static_cast<unsigned long long>(npc),
+                local, newHealth, reacted ? "hit reaction" : "flinch");
         }
 
         void TickDamage(float dt)
@@ -178,7 +221,6 @@ namespace coop::enemies {
             float lastTurnAt = -100.0f;
         };
         std::unordered_map<StringId64, Follower> g_followers;
-        float g_clock = 0.0f;
         constexpr float kFollowerTimeout = 3.0f;           // not in the host's list for 3 s -> leave it alone
 
         // Process pointers of the followers. Used by the co-op bullet-impact hook (a follower's
@@ -480,9 +522,35 @@ namespace coop::enemies {
         }
     }
 
+    void NotePartnerShot(uint8_t senderSlot)
+    {
+        if (senderSlot < kMaxNetPlayers) g_lastPartnerShot[senderSlot] = g_clock;
+    }
+
+    // Shift+F6 (solo test): the nearest living enemy within 15 m takes a "partner melee hit" of
+    // 20 health from the F10 test Ellie (without her: a flinch only), through the same path a
+    // partner's melee hit takes.
+    void TestPartnerHit(StringId64 testPuppet)
+    {
+        const Vector3 me = LOCATOR::GET_TRANSFORM(SID("player")).Position;
+        StringId64 best = 0;
+        float bestD = 15.0f * 15.0f;
+        for (StringId64 npc : FEDRA::GET_ALL_ENEMIES()) {
+            if (!npc || IsPuppet(npc) || npc == testPuppet || !ENTITY::DOES_EXIST(npc) || IsDead(npc)) continue;
+            const Vector3 p = LOCATOR::GET_TRANSFORM(npc).Position;
+            const float d = (p.x - me.x) * (p.x - me.x) + (p.y - me.y) * (p.y - me.y) + (p.z - me.z) * (p.z - me.z);
+            if (d < bestD) { bestD = d; best = npc; }
+        }
+        if (!best) { TO1_LOG("[enemies] Shift+F6: no living enemy within 15 m\n"); return; }
+        const uintptr_t from = (testPuppet && ENTITY::DOES_EXIST(testPuppet))
+            ? static_cast<uintptr_t>(DcManager::LookupObject(testPuppet)) : 0;
+        const float h = ENTITY::GET_HEALTH(best);
+        ApplyHitWithReaction(best, (std::max)(h - 20.0f, 1.0f), from, "Shift+F6 test");
+        g_known[best].health = ENTITY::GET_HEALTH(best);   // not reported to a partner as our own hit
+    }
+
     void OnEvent(uint8_t senderSlot, const uint8_t* data, uint8_t size)
     {
-        (void)senderSlot;
         const size_t n = size / sizeof(CoopEnemyEntry);
         for (size_t i = 0; i < n; ++i) {
             CoopEnemyEntry e;
@@ -500,10 +568,14 @@ namespace coop::enemies {
             }
             const float local = ENTITY::GET_HEALTH(e.npc);
             if (e.health < local - 0.01f) {
-                ENTITY::SET_HEALTH(e.npc, e.health);
-                TO1_LOG("[enemies] partner hit %016llX: %.1f -> %.1f\n", static_cast<unsigned long long>(e.npc), local, e.health);
+                const bool shot = senderSlot < kMaxNetPlayers && g_clock - g_lastPartnerShot[senderSlot] < kShotWindow;
+                if (shot) {
+                    ENTITY::SET_HEALTH(e.npc, e.health);
+                    TO1_LOG("[enemies] partner shot %016llX: %.1f -> %.1f\n", static_cast<unsigned long long>(e.npc), local, e.health);
+                }
+                else ApplyHitWithReaction(e.npc, e.health, PuppetOf(senderSlot), "partner");
             }
-            k.health = (std::min)(local, e.health);
+            k.health = (std::min)(local, ENTITY::GET_HEALTH(e.npc));
         }
     }
 }

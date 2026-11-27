@@ -1643,6 +1643,7 @@ namespace net::replication {
         case NEVT_THROWPROJECTILE: {
             ProjectileThrowEvent evt;
             if (!ReadPod(data, size, evt)) break;
+            coop::enemies::NotePartnerShot(static_cast<uint8_t>(senderSlot));
 
             uint64_t fromVec = MEMORY::ALLOC_VECTOR({ evt.fromPos[0], evt.fromPos[1], evt.fromPos[2] });
             uint64_t toVec = MEMORY::ALLOC_VECTOR({ evt.toPos[0],  evt.toPos[1],  evt.toPos[2] });
@@ -1664,6 +1665,7 @@ namespace net::replication {
         case NEVT_FIRE_SHOT: {
             FireShotEvent evt;
             if (!ReadPod(data, size, evt)) break;
+            coop::enemies::NotePartnerShot(static_cast<uint8_t>(senderSlot));   // its hits need no extra reaction
             const int exists = sender.npcSid ? (int)ENTITY::DOES_EXIST(sender.npcSid) : 0;
             const bool velFinite = std::isfinite(evt.launchVel[0]) &&
                 std::isfinite(evt.launchVel[1]) &&
