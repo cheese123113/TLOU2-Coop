@@ -1290,8 +1290,9 @@ namespace coop {
         {
             if (!g_mirrorSrc) return;
             NetClearRemoteAnim(kMirrorSlot, true);
+            NetClearSlotOwnRig(kMirrorSlot);
             NetSetSlotStreamAlive(kMirrorSlot, false);
-            NetSetCaptureSource(0);
+            NetSetEnemyCaptureSource(0);
             TO1_LOG("[mirror] stopped (%s) after %d frames, %d lists\n", why, g_mirrorFrames, g_mirrorLists);
             Flash("Shift+F6: mirror test off");
             g_mirrorSrc = g_mirrorDst = 0;
@@ -1313,7 +1314,8 @@ namespace coop {
             g_mirrorSrc = cands[0].second;          // the nearest: the one you melee
             g_mirrorDst = cands[1].second;          // the next one copies it
             g_mirrorSeq = 0; g_mirrorFrames = 0; g_mirrorLists = 0; g_mirrorNextLog = 0.0f;
-            NetSetCaptureSource(g_mirrorSrc);
+            NetAnimClearSlot(kMirrorSlot);              // fresh sequence baseline (restarts were rejected for seconds)
+            NetSetEnemyCaptureSource(g_mirrorSrc);      // the enemy channel, exactly as a melee stream uses it
             TO1_LOG("[mirror] start: %016llX (nearest, %.1f m) -> copied by %016llX (%.1f m)\n",
                 static_cast<unsigned long long>(g_mirrorSrc), std::sqrt(cands[0].first),
                 static_cast<unsigned long long>(g_mirrorDst), std::sqrt(cands[1].first));
@@ -1329,13 +1331,15 @@ namespace coop {
             if (NpcDead(g_mirrorDst)) { StopMirror("the copying enemy died"); return; }
             if (NpcDead(g_mirrorSrc)) { StopMirror("the source enemy died"); return; }
 
+            // the same path a partner's melee reaction takes: enemy channel, raw list, own-rig slot
+            if (!NetSetSlotOwnRig(kMirrorSlot, g_mirrorDst)) { ++g_mirrorFrames; return; }   // rig learned next frame
             float spine[20];
-            NetCaptureLocalAnim(spine);                 // captures g_mirrorSrc (capture source)
+            NetGetObjectSpine(g_mirrorSrc, spine);
             static uint8_t buf[kMaxAnimCmdBytes];
-            uint32_t skelId = 0; uint8_t epoch = 0;
-            const uint16_t bits = NetGetLocalAnimCmds(buf, static_cast<uint16_t>(kMaxAnimCmdBytes), &skelId, &epoch);
+            uint32_t skelId = 0;
+            const uint16_t bits = NetGetEnemyAnimCmdsRaw(buf, static_cast<uint16_t>(3800), &skelId);
             if (bits && NetAnimRxIngest(kMirrorSlot, ++g_mirrorSeq)) {
-                NetSetRemoteAnimCmds(kMirrorSlot, buf, bits, skelId, epoch, static_cast<uint32_t>(GetTickCount64() & 0xFFFFFFFFull));
+                NetSetRemoteAnimCmds(kMirrorSlot, buf, bits, skelId, 0, static_cast<uint32_t>(GetTickCount64() & 0xFFFFFFFFull));
                 ++g_mirrorLists;
             }
             NetApplyRemoteAnim(kMirrorSlot, g_mirrorDst, spine);

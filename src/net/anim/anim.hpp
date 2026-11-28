@@ -39,6 +39,19 @@ void NetCaptureLocalAnim(float* spine20);
 // again). Used by the solo animation mirror test (an enemy's list replayed onto another enemy)
 // and later for sending an enemy's hit reaction to the partner. GAME THREAD.
 void NetSetCaptureSource(uint64_t objSid);
+
+// ---- co-op enemy animation copies ------------------------------------------------------------
+// SENDER: capture ONE enemy's AnimCmdList on a second channel, alongside the player's (0 = off).
+// NetGetEnemyAnimCmdsRaw packs its newest list raw (no dictionary: any receiver slot can decode
+// it); NetGetObjectSpine reads any character's spine quats. GAME THREAD.
+void     NetSetEnemyCaptureSource(uint64_t objSid);
+uint16_t NetGetEnemyAnimCmdsRaw(uint8_t* out, uint16_t maxBytes, uint32_t* outSkelId);
+bool     NetGetObjectSpine(uint64_t objSid, float* spine20);
+// RECEIVER: make a replay slot target an NPC with its OWN rig (the copying enemy's skeleton and
+// anim table instead of the local player's). Returns true once the rig is known (its skeleton
+// is learned from the NPC's next animation call, so call this every frame until it is).
+bool     NetSetSlotOwnRig(int slot, uint64_t npcSid);
+void     NetClearSlotOwnRig(int slot);
 // PER REMOTE SLOT (0..kMaxNetPlayers-1): each remote puppet has its own replay state, so a 2v2's
 // three remotes each animate from their own replicated list. slot = the ORIGINAL author's net slot.
 void NetApplyRemoteAnim(int slot, uint64_t npcSid, const float* spine20);

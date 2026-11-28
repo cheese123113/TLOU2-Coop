@@ -1,4 +1,4 @@
-TLOU2 Campaign Co-op - test build (M3.17)
+TLOU2 Campaign Co-op - test build (M3.18)
 Fan project, built on the Twelve Weeks client (GPL-3.0). Needs The Last of Us Part II Remastered on Steam.
 
 INSTALL
@@ -35,8 +35,8 @@ WHAT WORKS IN THIS TEST
 - Doors and pickups: a door one player opens opens for both, an item one player picks up
   disappears for the other (also for a player who joins late). If the host dies or reloads,
   items picked up since the checkpoint come back for both.
-- Melee: an enemy your partner hits with melee (or an explosion / thrown item) reacts to the
-  hit on your screen too, instead of standing still until it dies.
+- Melee: an enemy your partner hits with melee plays the same reaction on your screen as on
+  theirs (its animation is copied for 2 seconds after each hit, whatever the weapon).
 - Enemies see and attack both players; their hits on your partner's character hurt your partner.
 - Friendly fire is off: your bullets do not hurt your partner. The host can turn it on with
   friendlyfire=1 in tlou2-coop.ini (the host's setting counts for both players).

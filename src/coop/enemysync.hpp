@@ -22,6 +22,11 @@ namespace coop::enemies {
     // Partner hit reactions: a partner's gunshot / arrow arrived (its replay already makes the
     // enemy react); any other partner hit is replayed with a (gunshot-style) hit reaction.
     void NotePartnerShot(uint8_t senderSlot);
+
+    // Melee reactions: for ~2 s after we land a melee hit on an enemy its animation is streamed
+    // to the partner (CoopEnemyAnim); the partner's copy replays it, whatever weapon or move
+    // caused it, then goes back to its own animation.
+    void OnEnemyAnim(uint8_t senderSlot, const uint8_t* data, size_t size);
     void Reset();                                          // session start / end
 
     // Engine-thread safe: is this process one of our followers? (root-locator guard)

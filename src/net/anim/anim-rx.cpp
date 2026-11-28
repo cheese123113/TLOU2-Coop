@@ -511,7 +511,9 @@ uintptr_t ReplayOntoNpc(uintptr_t ac, uintptr_t ctx, uintptr_t a3,
     // feather table is skeleton-keyed) -- our own local player is that same rig.
     // Fall back to the puppet's own skeleton (*ctx) only if we haven't seen the
     // player's yet; that at worst reproduces the all-fail behaviour of the wrong rig.
-    uintptr_t skel = (uintptr_t)g_localSkel;
+    const AnimReplay& repRig = s_replay[rxSlot >= 0 ? rxSlot : 0];
+    // co-op enemy copy: the target NPC's own rig (it is the same enemy type as the sender's)
+    uintptr_t skel = repRig.ownRig ? Rd<uintptr_t>(ctx) : (uintptr_t)g_localSkel;
     if (!San(skel)) skel = Rd<uintptr_t>(ctx);                 // *a2 = the PUPPET's ArtItemSkeleton*
 
     // +32, not +16: the terminator site appends the snapshot capture and blend tail
@@ -582,7 +584,7 @@ uintptr_t ReplayOntoNpc(uintptr_t ac, uintptr_t ctx, uintptr_t a3,
     // Resolve clips against the LOCAL PLAYER's table, not the puppet's: the AnimTable
     // hash key includes the skeleton id, so the sender's clips only exist under the
     // sender's skeleton. Our own local player shares that skeleton; the puppet does not.
-    const uintptr_t table = (uintptr_t)g_localAnimTable;
+    const uintptr_t table = repRig.ownRig ? (uintptr_t)repRig.ownTable : (uintptr_t)g_localAnimTable;
 
     for (int i = 0; i < len; ) {
         uint32_t sz = CmdSize(in[i]);
@@ -897,7 +899,7 @@ void NetSetRemoteAnimCmds(int senderSlot, const uint8_t* data, uint16_t bits, ui
     // Rig gate: clips and feather masks are both resolved against OUR local player's
     // skeleton. If the sender animated a different rig, the engine would soft-fail
     // each clip to an empty pose -- the exact input that poisons a one-sided blend.
-    uintptr_t skel = (uintptr_t)g_localSkel;
+    uintptr_t skel = rep.ownRig ? (uintptr_t)rep.ownSkel : (uintptr_t)g_localSkel;   // co-op enemy copy: its own rig
     if (!San(skel) || skelId == 0 || Rd<uint32_t>(skel + 52) != skelId) return;
     if (!AnimListValid(cmd, len)) return;
 
@@ -907,7 +909,7 @@ void NetSetRemoteAnimCmds(int senderSlot, const uint8_t* data, uint16_t bits, ui
     // the anim thread only ever sees an index valid in THIS process for THIS rig.
     static uint32_t s_x[kMaxAnimCmdDwords];
     memcpy(s_x, cmd, (size_t)len * 4);
-    const uintptr_t fad = (uintptr_t)g_localFgAnimData;
+    const uintptr_t fad = rep.ownRig ? (uintptr_t)rep.ownFg : (uintptr_t)g_localFgAnimData;
     uint32_t xlen = len;
 
     for (uint32_t i = 0; i < xlen; ) {
@@ -921,7 +923,7 @@ void NetSetRemoteAnimCmds(int senderSlot, const uint8_t* data, uint16_t bits, ui
             // DIFFERENT feather blend. That collision returned a perfectly-formed mask
             // over the WRONG joints -- every layer scoped to an arbitrary joint subset,
             // which is exactly "all parts of the body doing their own thing".
-            if (FeatherEntryMatches(idx, fbSid, (uintptr_t)g_localSkel)) {
+            if (FeatherEntryMatches(idx, fbSid, skel)) {
                 s_x[i + 10] = idx;                            // local index for the anim job
                 s_x[i + 11] = 0;
             }
@@ -987,6 +989,49 @@ void NetSetRemoteAnimCmds(int senderSlot, const uint8_t* data, uint16_t bits, ui
 //  whose baked root motion drags the puppet against the replicated locator. Aim
 //  (spine) is copied post-anim, exactly as it was locally.
 // ============================================================================
+// ---- co-op enemy copies: own-rig slots -----------------------------------------------------
+static uintptr_t RxBaseTable(uintptr_t go)
+{
+    static const uint64_t kBase = 0x9A7CE19BAA54C278ull;   // SID("base")
+    if (!San(go)) return 0;
+    const uintptr_t ac = Rd<uintptr_t>(go + GO_ANIMCONTROL); if (!San(ac)) return 0;
+    const uint32_t n = Rd<uint32_t>(ac + AC_NUMLAYERS); const uintptr_t ent = Rd<uintptr_t>(ac + AC_LAYERARR);
+    if (n > 64 || !San(ent)) return 0;
+    for (uint32_t i = 0; i < n; i++) {
+        const uintptr_t e = ent + (uintptr_t)i * LE_STRIDE;
+        if (!Rd<uint8_t>(e + LE_VALID) || Rd<uint64_t>(e + LE_NAME) != kBase) continue;
+        const uintptr_t L = Rd<uintptr_t>(e + LE_PTR);
+        return San(L) ? Rd<uintptr_t>(L + 0x10) : 0;
+    }
+    return 0;
+}
+
+bool NetSetSlotOwnRig(int slot, uint64_t npcSid)
+{
+    if (slot < 0 || slot >= kMaxNetPlayers) return false;
+    AnimReplay& rep = s_replay[slot];
+    const uint64_t obj = npcSid ? DcManager::LookupObject(npcSid) : 0;
+    if (!obj) return false;
+    const uintptr_t ac = Rd<uintptr_t>((uintptr_t)obj + GO_ANIMCONTROL);
+    if (!San(ac)) return false;
+    if (rep.probeAC != ac) { rep.ownSkel = 0; rep.probeAC = ac; }
+    const uintptr_t table = RxBaseTable((uintptr_t)obj);
+    const uintptr_t fg = Rd<uintptr_t>((uintptr_t)obj + 0x1C0);
+    if (San(table)) rep.ownTable = table;
+    if (San(fg)) rep.ownFg = fg;
+    rep.ownRig = 1;
+    return San(rep.ownSkel) && San(rep.ownTable);
+}
+
+void NetClearSlotOwnRig(int slot)
+{
+    if (slot < 0 || slot >= kMaxNetPlayers) return;
+    AnimReplay& rep = s_replay[slot];
+    rep.ownRig = 0;
+    rep.probeAC = 0;
+    rep.ownSkel = rep.ownTable = rep.ownFg = 0;
+}
+
 void NetApplyRemoteAnim(int slot, uint64_t npcSid, const float* spine20)
 {
     if (slot < 0 || slot >= kMaxNetPlayers) return;
@@ -1068,4 +1113,4 @@ void NetClearRemoteAnim(int slot, bool dropLastGood)
 void NetClearRemoteAnimAll(bool dropLastGood)
 {
     for (int s = 0; s < kMaxNetPlayers; ++s) NetClearRemoteAnim(s, dropLastGood);
-}
+}

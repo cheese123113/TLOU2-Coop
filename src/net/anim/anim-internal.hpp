@@ -327,6 +327,12 @@ struct AnimReplay {
     uint8_t       rxEpoch;
     bool          rxEpochSet;
     void* volatile snapNode;
+    // Co-op enemy copy ("own rig"): this slot replays onto an NPC with its OWN skeleton
+    // and anim table (an enemy copying the partner's copy of the same enemy) instead of
+    // the local player's. ownSkel is learned on the anim thread from the NPC's own
+    // CreateAnimCmds (probeAC), ownTable / ownFg on the game thread.
+    volatile long      ownRig = 0;
+    volatile uintptr_t ownSkel = 0, ownTable = 0, ownFg = 0, probeAC = 0;
     // Replicated weapon-IK feather fade for THIS puppet, as raw float bits (the anim
     // thread reads it, the game thread writes it, and a long is the widest thing both
     // can touch atomically without dragging <atomic> into the payload path). 0 = no IK.
@@ -365,7 +371,11 @@ extern AnimReplay s_replay[kMaxNetPlayers];   // static storage, anim-rx.cpp
 
 // ---- defined in anim-tx.cpp (capture branch / sender side) ----------------
 extern volatile uintptr_t g_localAC, g_localAnimTable, g_localSkel, g_localFgAnimData;
-void CaptureLocalList(uintptr_t a3, uint32_t cursorIn, uint32_t cursorOut);
+struct TxChan;
+void CaptureLocalList(uintptr_t a3, uint32_t cursorIn, uint32_t cursorOut, TxChan* ch = nullptr);
+// Co-op enemy capture channel: one enemy whose list is captured alongside the player's.
+extern TxChan g_txEnemy;
+extern volatile uintptr_t g_enemyCapAC, g_enemyCapSkel;
 
 // ---- defined in anim-rx.cpp -----------------------------------------------
 uintptr_t ReplayOntoNpc(uintptr_t ac, uintptr_t ctx, uintptr_t a3,
@@ -427,4 +437,4 @@ namespace animcodec {
     void RxDictEpoch(int s, uint8_t epoch);
     bool GetRef(int s, BitR& r, uint64_t& key);
 
-} // namespace animcodec
+} // namespace animcodec

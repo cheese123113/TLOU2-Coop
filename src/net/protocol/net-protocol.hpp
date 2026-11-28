@@ -9,7 +9,7 @@ using NetSid64 = uint64_t;
 #endif
 
 constexpr uint32_t kNetMagic = 0x4F523254;   // 'T2RO'
-constexpr uint16_t kProtocolVersion = 51;          // co-op: 42 NEVT_COOP_ENEMY, 43 CoopEnemies, 44 NEVT_COOP_WHERE, 45 CoopAlive, 46 NEVT_COOP_HURT, 47 CoopWhereEvent.life, 48 .difficulty, 49 NEVT_COOP_ENEMY_FIRE, 50 world sync (pickups / doors), 51 CoopWhereEvent.flags
+constexpr uint16_t kProtocolVersion = 52;          // co-op: 42 NEVT_COOP_ENEMY, 43 CoopEnemies, 44 NEVT_COOP_WHERE, 45 CoopAlive, 46 NEVT_COOP_HURT, 47 CoopWhereEvent.life, 48 .difficulty, 49 NEVT_COOP_ENEMY_FIRE, 50 world sync (pickups / doors), 51 CoopWhereEvent.flags, 52 CoopEnemyAnim
 constexpr uint16_t kNetDefaultPort = 7777;
 constexpr int      kMaxAnimCmdDwords = 1280;
 constexpr int      kMaxNetPlayers = 4;
@@ -34,6 +34,7 @@ enum class NetPacketType : uint8_t {
     AnimCmd = 7,   // both ways      : AnimCmdPayload -- the sender's captured AnimCmdList
     CoopEnemies = 8, // host -> all  : CoopEnemiesPayload -- co-op: where the host's enemies are
     CoopAlive = 9,   // host -> all  : CoopAlivePayload -- co-op: every enemy alive on the host (late-join reconcile)
+    CoopEnemyAnim = 10, // both ways : CoopEnemyAnimPayload -- co-op: an enemy's animation while it reacts to our melee
 };
 
 enum class NetRejectReason : uint8_t {
@@ -233,6 +234,21 @@ struct CoopEnemiesPayload {
 // Every enemy alive on the host, sent with NEVT_COOP_WHERE every 2 s. A partner that joined
 // late (or walked into a trigger the host has not) reconciles against it: enemies the host
 // does not have are removed, enemies only the host has are spawned from the same-named spawner.
+// Co-op: the animation of an enemy reacting to a melee hit we landed, for ~2 s after the hit,
+// so the partner's copy plays the same reaction (whatever weapon / move caused it). The list
+// is the anim codec's RAW form (no shared dictionary); spine = spinea..neck local quats.
+struct CoopEnemyAnimPayload {
+    NetSid64 npc;
+    uint32_t seq;            // per stream, for the receiver's anim sequence gate
+    uint32_t skelId;         // the enemy's rig; the receiver's copy must match
+    uint32_t sendMs;
+    float    spine[20];
+    uint16_t bits;
+    uint8_t  data[kMaxAnimCmdBytes];
+};
+constexpr size_t kCoopEnemyAnimHeader = offsetof(CoopEnemyAnimPayload, data);
+constexpr size_t kCoopEnemyAnimMaxWire = 3900;   // session buffers hold 4 KB
+
 struct CoopAliveEntry {
     NetSid64 npc;
     float    pos[3];

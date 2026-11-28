@@ -9,6 +9,7 @@
 #include "engine/structs.hpp"
 #include "coop/coop.hpp"
 #include "net-hooks.hpp"
+#include "anim.hpp"
 
 #include <array>
 #include <atomic>
@@ -60,8 +61,12 @@ namespace coop::enemies {
         // A death from the partner: kill our copy through the engine's own damage path (the
         // same call Twelve Weeks uses for its death blow), so it ragdolls and counts as dead
         // for the level scripts. Falls back to zero health if the attack is refused.
+        void StopRxEnemyAnim(const char* why);
+        StringId64 g_rxAnimNpc = 0;
+
         void ApplyDeath(StringId64 npc)
         {
+            if (npc == g_rxAnimNpc) StopRxEnemyAnim("the enemy is being killed");   // never replay onto a dying NPC
             const uintptr_t target = static_cast<uintptr_t>(DcManager::LookupObject(npc));
             const uintptr_t player = static_cast<uintptr_t>(DcManager::LookupObject(SID("player")));
             bool killed = false;
@@ -134,6 +139,86 @@ namespace coop::enemies {
             if (!IsDead(npc)) ENTITY::SET_HEALTH(npc, newHealth);
             TO1_LOG("[enemies] %s hit %016llX: %.1f -> %.1f, %s\n", who, static_cast<unsigned long long>(npc),
                 local, newHealth, how);
+        }
+
+        // ------------------------------------------------------------------ melee reaction animations
+        // SENDER: the enemy our melee hit landed on is captured on the anim engine's enemy channel
+        // and streamed for kStreamSec after the newest hit (each hit extends it).
+        constexpr float kStreamSec = 2.0f;
+        StringId64 g_txAnimNpc = 0;
+        float      g_txAnimUntil = 0.0f;
+        uint32_t   g_txAnimSeq = 0;
+        int        g_txAnimPackets = 0;
+
+        void StopTxEnemyAnim(const char* why)
+        {
+            if (!g_txAnimNpc) return;
+            TO1_LOG("[enemy-anim] stop streaming %016llX (%s, %d packets)\n", static_cast<unsigned long long>(g_txAnimNpc), why, g_txAnimPackets);
+            NetSetEnemyCaptureSource(0);
+            g_txAnimNpc = 0;
+        }
+
+        void TickTxEnemyAnim()
+        {
+            if (const uintptr_t victim = net::hooks::TakeLocalMeleeVictim()) {
+                StringId64 hit = 0;
+                for (StringId64 npc : FEDRA::GET_ALL_ENEMIES())
+                    if (npc && static_cast<uintptr_t>(DcManager::LookupObject(npc)) == victim) { hit = npc; break; }
+                if (hit && !IsPuppet(hit)) {
+                    if (hit != g_txAnimNpc) {
+                        StopTxEnemyAnim("a new melee target");
+                        g_txAnimNpc = hit;
+                        g_txAnimPackets = 0;
+                        NetSetEnemyCaptureSource(hit);
+                        TO1_LOG("[enemy-anim] melee hit %016llX -> streaming its reaction\n", static_cast<unsigned long long>(hit));
+                    }
+                    g_txAnimUntil = g_clock + kStreamSec;
+                }
+            }
+            if (!g_txAnimNpc) return;
+            if (g_clock > g_txAnimUntil) { StopTxEnemyAnim("reaction window over"); return; }
+            if (!ENTITY::DOES_EXIST(g_txAnimNpc)) { StopTxEnemyAnim("gone"); return; }
+            if (IsDead(g_txAnimNpc)) { StopTxEnemyAnim("dead"); return; }
+
+            static CoopEnemyAnimPayload pkt;
+            uint32_t skelId = 0;
+            const size_t room = kCoopEnemyAnimMaxWire - kCoopEnemyAnimHeader;
+            const uint16_t bits = NetGetEnemyAnimCmdsRaw(pkt.data, static_cast<uint16_t>(room), &skelId);
+            if (!bits || !skelId) return;
+            pkt.npc = g_txAnimNpc;
+            pkt.seq = ++g_txAnimSeq;
+            pkt.skelId = skelId;
+            pkt.sendMs = static_cast<uint32_t>(GetTickCount64() & 0xFFFFFFFFull);
+            NetGetObjectSpine(g_txAnimNpc, pkt.spine);
+            pkt.bits = bits;
+            net::session::SendCoopEnemyAnim(&pkt, kCoopEnemyAnimHeader + (bits + 7u) / 8u);
+            ++g_txAnimPackets;
+        }
+
+        // RECEIVER: replay slot kRxAnimSlot (never a real player's slot in a 2-player game) on
+        // our copy of the enemy, with that enemy's own rig; released kRxTimeout after the
+        // stream stops, or before the enemy is killed here.
+        constexpr int   kRxAnimSlot = kMaxNetPlayers - 1;
+        constexpr float kRxTimeout = 0.4f;
+        float g_rxAnimLast = 0.0f;
+        int   g_rxAnimLists = 0;
+
+        void StopRxEnemyAnim(const char* why)
+        {
+            if (!g_rxAnimNpc) return;
+            NetClearRemoteAnim(kRxAnimSlot, true);
+            NetClearSlotOwnRig(kRxAnimSlot);
+            NetSetSlotStreamAlive(kRxAnimSlot, false);
+            TO1_LOG("[enemy-anim] stop replaying %016llX (%s, %d lists)\n", static_cast<unsigned long long>(g_rxAnimNpc), why, g_rxAnimLists);
+            g_rxAnimNpc = 0;
+        }
+
+        void TickRxEnemyAnim()
+        {
+            if (!g_rxAnimNpc) return;
+            if (!ENTITY::DOES_EXIST(g_rxAnimNpc)) { StopRxEnemyAnim("gone"); return; }
+            if (IsDead(g_rxAnimNpc)) { StopRxEnemyAnim("dead"); return; }
+            if (g_clock - g_rxAnimLast > kRxTimeout) StopRxEnemyAnim("stream ended");
         }
 
         void TickDamage(float dt)
@@ -490,6 +575,8 @@ namespace coop::enemies {
         if (!(dt > 0.0f) || dt > 1.0f) return;             // paused / loading
         g_clock += dt;
         TickDamage(dt);
+        TickTxEnemyAnim();
+        TickRxEnemyAnim();
         if (net::session::IsHost()) {
             TickHostPositions(dt);
             static float s_nextIds = 0.0f;
@@ -537,6 +624,32 @@ namespace coop::enemies {
     void NotePartnerShot(uint8_t senderSlot)
     {
         if (senderSlot < kMaxNetPlayers) g_lastPartnerShot[senderSlot] = g_clock;
+    }
+
+    void OnEnemyAnim(uint8_t senderSlot, const uint8_t* data, size_t size)
+    {
+        (void)senderSlot;
+        if (size < kCoopEnemyAnimHeader) return;
+        static CoopEnemyAnimPayload pkt;
+        memcpy(&pkt, data, (std::min)(size, sizeof(pkt)));
+        const size_t need = kCoopEnemyAnimHeader + (pkt.bits + 7u) / 8u;
+        if (!pkt.npc || !pkt.bits || size < need) return;
+        if (!ENTITY::DOES_EXIST(pkt.npc) || IsDead(pkt.npc) || IsPuppet(pkt.npc)) return;
+        if (pkt.npc != g_rxAnimNpc) {
+            StopRxEnemyAnim("another enemy");
+            NetAnimClearSlot(kRxAnimSlot);                 // fresh sequence baseline / banks
+            g_rxAnimNpc = pkt.npc;
+            g_rxAnimLists = 0;
+            TO1_LOG("[enemy-anim] partner's melee reaction on %016llX -> replaying it here\n", static_cast<unsigned long long>(pkt.npc));
+        }
+        g_rxAnimLast = g_clock;
+        if (!NetSetSlotOwnRig(kRxAnimSlot, pkt.npc)) return;   // rig learned next frame
+        if (NetAnimRxIngest(kRxAnimSlot, pkt.seq)) {
+            NetSetRemoteAnimCmds(kRxAnimSlot, pkt.data, pkt.bits, pkt.skelId, 0, pkt.sendMs);
+            ++g_rxAnimLists;
+        }
+        NetApplyRemoteAnim(kRxAnimSlot, pkt.npc, pkt.spine);
+        NetSetSlotStreamAlive(kRxAnimSlot, true);
     }
 
     void OnEvent(uint8_t senderSlot, const uint8_t* data, uint8_t size)

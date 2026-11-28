@@ -57,8 +57,8 @@ friendlyfire=0  ; 1 = your bullets hurt your partner (the host's setting counts 
 - **Shared enemies:** the host's game runs the enemies. On the joined player's screen the same
   enemies follow the host's, walking, running, turning and firing with their own animations.
   Enemies see and attack both players. Damage and kills from either player apply to both.
-  An enemy your partner hits with melee (or an explosion / thrown item) plays its hit reaction
-  on your screen too.
+  An enemy your partner hits with melee plays the same reaction on your screen: its animation
+  is copied from your partner's game for 2 seconds after each hit, whatever the weapon or move.
 - **Doors and pickups:** a door one player opens opens for both. An item one player picks up
   disappears for the other. If the host dies or reloads, items picked up since the checkpoint
   come back for both.

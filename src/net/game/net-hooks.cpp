@@ -1343,6 +1343,8 @@ namespace net::hooks {
     static SafetyHookInline g_hkMeleeProbe;
     static std::atomic<int> g_meleeProbeLogs{ 0 };
     static std::atomic<uint64_t> g_lastMeleeWeapon{ 0 }, g_lastMeleeMove{ 0 };
+    static std::atomic<uintptr_t> g_lastMeleeVictim{ 0 };
+    uintptr_t TakeLocalMeleeVictim() { return g_lastMeleeVictim.exchange(0); }
     static std::atomic<uint32_t> g_lastMeleeClass{ 0 };
     void LastLocalMelee(uint64_t& weapon, uint32_t& meleeClass, uint64_t& move)
     {
@@ -1358,6 +1360,7 @@ namespace net::hooks {
                 // animations (replaying one on another enemy crashed the game) and carry huge
                 // damage (15000 seen); a normal swing does 10-50.
                 const float dmgSeen = *reinterpret_cast<const float*>(ai + 0x40);
+                if (kind == 1 && local && AttackerFromAttackInfo(ai) == local) g_lastMeleeVictim.store(victim);
                 if (kind == 1 && local && AttackerFromAttackInfo(ai) == local && *reinterpret_cast<const uint64_t*>(ai + 0x968)
                     && dmgSeen > 0.0f && dmgSeen <= 100.0f) {
                     g_lastMeleeWeapon.store(*reinterpret_cast<const uint64_t*>(ai + 0x20));

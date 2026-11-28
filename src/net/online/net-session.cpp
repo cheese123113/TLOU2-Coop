@@ -97,6 +97,7 @@ namespace net::session {
         case NetPacketType::AnimCmd: return "AnimCmd";
         case NetPacketType::CoopEnemies: return "CoopEnemies";
         case NetPacketType::CoopAlive: return "CoopAlive";
+        case NetPacketType::CoopEnemyAnim: return "CoopEnemyAnim";
         default:                     return "?";
         }
     }
@@ -550,6 +551,12 @@ namespace net::session {
             if (g_role == NetRole::Client && transport::SameAddr(from, g_hostAddr))
                 coop::enemies::OnHostAlive(body, bodyLen);
             break;
+        case NetPacketType::CoopEnemyAnim:
+            // both ways: a client takes it from its host, the host from a known peer
+            if ((g_role == NetRole::Client && transport::SameAddr(from, g_hostAddr)) ||
+                (g_role == NetRole::Host && PeerForAddr(from)))
+                coop::enemies::OnEnemyAnim(hdr.senderSlot, body, bodyLen);
+            break;
         default: break;
         }
     }
@@ -566,6 +573,16 @@ namespace net::session {
     }
     void SendCoopEnemies(const void* payload, size_t len) { SendCoopToPeers(NetPacketType::CoopEnemies, payload, len); }
     void SendCoopAlive(const void* payload, size_t len)   { SendCoopToPeers(NetPacketType::CoopAlive, payload, len); }
+    // Co-op, both ways (unlike the two above): every connected peer, unreliable.
+    void SendCoopEnemyAnim(const void* payload, size_t len)
+    {
+        if (!IsConnected()) return;
+        for (int s = 0; s < kMaxNetPlayers; s++) {
+            NetPeer& peer = g_peers[s];
+            if (!peer.active) continue;
+            SendRaw(peer, NetPacketType::CoopEnemyAnim, static_cast<uint8_t>(g_mySlot), 0, payload, len);
+        }
+    }
 
 
     static constexpr uint32_t kEvtRingCap   = 256; // power of two, far past worst case

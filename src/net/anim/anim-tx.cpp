@@ -55,6 +55,25 @@ static void TxPublish(const uint32_t* list, long n)
     g_txGen.fetch_add(1, std::memory_order_release);        // even: publish complete
 }
 
+// Co-op: a second capture channel for one ENEMY (its hit reaction is streamed to the partner,
+// or mirrored onto another enemy in the solo test). Same seqlock scheme as the player's.
+struct TxChan {
+    uint32_t cmd[kMaxAnimCmdDwords];
+    volatile long len = 0;
+    std::atomic<uint32_t> gen{ 0 };
+};
+TxChan g_txEnemy;
+volatile uintptr_t g_enemyCapAC = 0, g_enemyCapSkel = 0;
+
+static void TxPublishTo(TxChan* ch, const uint32_t* list, long n)
+{
+    if (!ch) { TxPublish(list, n); return; }
+    ch->gen.fetch_add(1, std::memory_order_acq_rel);
+    if (n > 0) memcpy(ch->cmd, list, (size_t)n * 4);
+    ch->len = n;
+    ch->gen.fetch_add(1, std::memory_order_release);
+}
+
 // ArtItemAnim layout (confirmed in the anim-group login path, sub_142910FE0):
 //   +0x18  u64 nameId (StringId64)   +0x50  u32 skelId
 // The AnimTable is a hash keyed by (0x100000001B3 * nameId) ^ skelId, built from
@@ -98,15 +117,15 @@ volatile long g_txOverlayRemap = 0;
 // translate it into a portable template: clip ptr -> clip SID, feather ptrs -> 0
 // (the receiver re-derives them). Any unknown opcode -- which may hide a pointer --
 // voids the whole frame.
-void CaptureLocalList(uintptr_t a3, uint32_t cursorIn, uint32_t cursorOut) {
-    if (cursorOut <= cursorIn) { TxPublish(nullptr, 0); return; }
+void CaptureLocalList(uintptr_t a3, uint32_t cursorIn, uint32_t cursorOut, TxChan* ch) {
+    if (cursorOut <= cursorIn) { TxPublishTo(ch, nullptr, 0); return; }
     uint32_t n = cursorOut - cursorIn;
     uintptr_t buf = Rd<uintptr_t>(a3);
-    if (n > (uint32_t)kMaxAnimCmdDwords) { TxPublish(nullptr, 0); return; }
-    if (!San(buf)) { TxPublish(nullptr, 0); return; }
+    if (n > (uint32_t)kMaxAnimCmdDwords) { TxPublishTo(ch, nullptr, 0); return; }
+    if (!San(buf)) { TxPublishTo(ch, nullptr, 0); return; }
 
     uint32_t t[kMaxAnimCmdDwords];
-    if (!SafeRW(buf + 4ull * cursorIn, t, (size_t)n * 4, false)) { TxPublish(nullptr, 0); return; }
+    if (!SafeRW(buf + 4ull * cursorIn, t, (size_t)n * 4, false)) { TxPublishTo(ch, nullptr, 0); return; }
 
     // RE-ENCODE (never filter). Build the portable list into `out`, substituting
     // in place where a command isn't portable. Any command we can neither carry nor
@@ -115,7 +134,7 @@ void CaptureLocalList(uintptr_t a3, uint32_t cursorIn, uint32_t cursorOut) {
     uint32_t o = 0;
     uint32_t headers = 0, terms = 0;
 
-#define TX_SKIP() do { TxPublish(nullptr, 0); return; } while (0)
+#define TX_SKIP() do { TxPublishTo(ch, nullptr, 0); return; } while (0)
 
     for (uint32_t i = 0; i < n; ) {
         uint32_t sz = CmdSize(t[i]);
@@ -270,10 +289,10 @@ void CaptureLocalList(uintptr_t a3, uint32_t cursorIn, uint32_t cursorOut) {
     }
 #undef TX_SKIP
 
-    if (headers != 1 || terms != 1) { TxPublish(nullptr, 0); return; }
-    if (CmdOp(out[o - 2]) != OP_TERM) { TxPublish(nullptr, 0); return; }  // 0x04 must be last
+    if (headers != 1 || terms != 1) { TxPublishTo(ch, nullptr, 0); return; }
+    if (CmdOp(out[o - 2]) != OP_TERM) { TxPublishTo(ch, nullptr, 0); return; }  // 0x04 must be last
 
-    TxPublish(out, (long)o);
+    TxPublishTo(ch, out, (long)o);
 }
 
 // ============================================================================
@@ -308,6 +327,65 @@ void NetCaptureLocalAnim(float* spine20)
             for (int k = 0; k < 4; ++k)
                 spine20[(idx - 1) * 4 + k] = Rd<float>(arr + 48ull * idx + 16 + 4 * k);
 
+}
+
+// ---- co-op enemy channel (game thread) ---------------------------------------------------
+void NetSetEnemyCaptureSource(uint64_t objSid)
+{
+    uintptr_t ac = 0;
+    if (objSid) {
+        const uint64_t obj = DcManager::LookupObject(objSid);
+        if (obj) ac = Rd<uintptr_t>((uintptr_t)obj + GO_ANIMCONTROL);
+    }
+    if (!San(ac)) ac = 0;
+    if (ac != g_enemyCapAC) {
+        g_enemyCapAC = ac;
+        TxPublishTo(&g_txEnemy, nullptr, 0);        // never ship the previous enemy's list
+    }
+}
+
+// The enemy channel's newest list as a RAW packet (the codec's raw-dword format: no shared
+// dictionary, so it can go to any receiver slot without definitions). 0 = nothing this frame.
+uint16_t NetGetEnemyAnimCmdsRaw(uint8_t* out, uint16_t maxBytes, uint32_t* outSkelId)
+{
+    if (outSkelId) *outSkelId = 0;
+    if (!g_animSyncEnabled || !g_enemyCapAC) return 0;
+    static uint32_t snap[kMaxAnimCmdDwords];
+    long n = 0;
+    for (int tries = 0; ; ++tries) {
+        const uint32_t gen0 = g_txEnemy.gen.load(std::memory_order_acquire);
+        if (!(gen0 & 1u)) {
+            n = g_txEnemy.len;
+            if (n <= 0 || n > (long)kMaxAnimCmdDwords) return 0;
+            memcpy(snap, g_txEnemy.cmd, (size_t)n * 4);
+            std::atomic_thread_fence(std::memory_order_acquire);
+            if (g_txEnemy.gen.load(std::memory_order_relaxed) == gen0) break;
+        }
+        if (tries >= 7) return 0;
+    }
+    const uintptr_t skel = (uintptr_t)g_enemyCapSkel;
+    if (!San(skel)) return 0;
+    if (outSkelId) *outSkelId = Rd<uint32_t>(skel + 52);
+    animcodec::BitW w(out, maxBytes);                // the codec's own writer (MSB-first), raw format
+    w.put(0, 1); w.put((uint64_t)n, 16);
+    for (long k = 0; k < n; ++k) w.put(snap[k], 32);
+    if (!w.ok) return 0;
+    return (uint16_t)w.pos;
+}
+
+// spinea..neck local quats of any character (what NetCaptureLocalAnim reads for the player)
+bool NetGetObjectSpine(uint64_t objSid, float* spine20)
+{
+    for (int i = 0; i < 20; ++i) spine20[i] = 0.0f;
+    const uint64_t obj = objSid ? DcManager::LookupObject(objSid) : 0;
+    if (!obj) return false;
+    const uintptr_t ad = Rd<uintptr_t>((uintptr_t)obj + 0x1C0);
+    const uintptr_t arr = San(ad) ? Rd<uintptr_t>(ad + 0xE0) : 0;
+    if (!San(arr)) return false;
+    for (int idx = 1; idx <= 5; ++idx)
+        for (int k = 0; k < 4; ++k)
+            spine20[(idx - 1) * 4 + k] = Rd<float>(arr + 48ull * idx + 16 + 4 * k);
+    return true;
 }
 
 namespace animcodec {

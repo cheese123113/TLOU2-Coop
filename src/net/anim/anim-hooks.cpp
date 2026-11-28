@@ -93,6 +93,10 @@ static uintptr_t __fastcall hk_CreateAnimCmds(uintptr_t a1, uintptr_t a2, uintpt
     if (!g_animSyncEnabled)                                      // kill switch: pure pass-through
         return g_hkCreateAnimCmds.call<uintptr_t>(a1, a2, a3);
 
+    // Co-op enemy copies: learn each own-rig slot's skeleton from its NPC's own call.
+    if (a1) for (int s = 0; s < kMaxNetPlayers; ++s)
+        if (s_replay[s].probeAC == a1) s_replay[s].ownSkel = Rd<uintptr_t>(a2);
+
     // RECEIVER: replay the remote list onto the NPC puppet. THIS OR NOTHING --
     // there is no fallback to any other anim-sync method. Find WHICH remote slot's puppet this
     // AnimControl is (a 4-element search on the anim thread is negligible); each has its own list.
@@ -181,14 +185,18 @@ static uintptr_t __fastcall hk_CreateAnimCmds(uintptr_t a1, uintptr_t a2, uintpt
 
     // SENDER: run the original, then snapshot the local player's inner list.
     bool isLocal = (a1 && a1 == g_localAC);
+    const bool isEnemySrc = (a1 && a1 == g_enemyCapAC);    // co-op: the enemy being streamed
     if (isLocal) {
         // the player's own ArtItemSkeleton, for skeleton-matched feather masks on replay
         g_localSkel = Rd<uintptr_t>(a2);
     }
-    uint32_t cursorIn = isLocal ? Rd<uint32_t>(a3 + 12) : 0;
+    if (isEnemySrc) g_enemyCapSkel = Rd<uintptr_t>(a2);
+    uint32_t cursorIn = (isLocal || isEnemySrc) ? Rd<uint32_t>(a3 + 12) : 0;
     uintptr_t r = g_hkCreateAnimCmds.call<uintptr_t>(a1, a2, a3);
     if (isLocal)
         CaptureLocalList(a3, cursorIn, Rd<uint32_t>(a3 + 12));
+    else if (isEnemySrc)
+        CaptureLocalList(a3, cursorIn, Rd<uint32_t>(a3 + 12), &g_txEnemy);
     return r;
 }
 
