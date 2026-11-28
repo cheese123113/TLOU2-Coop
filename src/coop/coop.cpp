@@ -599,7 +599,7 @@ namespace coop {
                     if (Readable(writer + 0x14, 4, true)) memcpy(reinterpret_cast<void*>(writer + 0x14), &ok, 4);
                 }
                 g_savesBlocked.fetch_add(1, std::memory_order_relaxed);
-                TO1_LOG("[coop] save blocked (slot %d) -- joined as a guest, your own save is untouched\n", slot);
+                TO1_LOG("[coop] save blocked (slot %d) -- saving is off (guest or test session), your own save is untouched\n", slot);
                 return 0;
             }
             return g_hkSaveRequest.unsafe_fastcall<uint32_t>(req);
@@ -834,6 +834,45 @@ namespace coop {
             coop::enemies::SendAliveSnapshot();          // late-join reconcile on the partner
         }
 
+        // A story task the mod loads from the main menu (boot_task, joining from the menu) leaves
+        // the front-end menu stack up behind the game, so the menu keeps the mouse and the
+        // camera cannot be moved. Two seconds after the player exists the mod closes it:
+        // menu2-pop-page until the main stack is empty, then menu2-hide-page-stack. Only after
+        // the mod's own loads -- never a menu the player opened.
+        bool  g_closeMenuAfterLoad = false;
+        float g_menuLoadPlayerSince = -1.0f;
+
+        void PlayTaskFromMod(StringId64 node, StringId64 task)
+        {
+            if (!ENTITY::DOES_EXIST(SID("player"))) {
+                g_closeMenuAfterLoad = true;
+                g_menuLoadPlayerSince = -1.0f;
+            }
+            DEBUG::PLAY_TASK(node, task, 0);
+        }
+
+        void TickCloseMenuAfterLoad()
+        {
+            if (!g_closeMenuAfterLoad) return;
+            if (!ENTITY::DOES_EXIST(SID("player"))) { g_menuLoadPlayerSince = -1.0f; return; }
+            if (g_menuLoadPlayerSince < 0.0f) { g_menuLoadPlayerSince = g_clock; return; }
+            if (g_clock - g_menuLoadPlayerSince < 2.0f) return;
+            g_closeMenuAfterLoad = false;
+            const StringId64 first = MENU2::GET_TOP_PAGE_IN_STACK(MenuStack::main);
+            int pops = 0;
+            for (; pops < 10 && MENU2::GET_TOP_PAGE_IN_STACK(MenuStack::main); ++pops)
+                DC::Call<"menu2-pop-page">(static_cast<uint64_t>(MenuStack::main), 0ull);
+            // hide the stack only if popping did not empty it (a hidden stack might also hide
+            // menus the player opens later)
+            if (MENU2::GET_TOP_PAGE_IN_STACK(MenuStack::main))
+                DC::Call<"menu2-hide-page-stack">(static_cast<uint64_t>(MenuStack::main), 1ull);
+            const StringId64 left = MENU2::GET_TOP_PAGE_IN_STACK(MenuStack::main);
+            const uint64_t shown = DC::Call<"menu2-is-page-stack-shown?">(static_cast<uint64_t>(MenuStack::main));
+            TO1_LOG("[coop] closed the main menu after our load: top page %016llX, %d pop(s), now %016llX, stack shown %llu\n",
+                static_cast<unsigned long long>(first), pops, static_cast<unsigned long long>(left),
+                static_cast<unsigned long long>(shown & 0xFF));
+        }
+
         // Partner: load the host's chapter part when not in it, then stand next to the host.
         // Within the same part (node) a different task is NOT reloaded -- tasks change at every
         // checkpoint and the partner normally walks through them alongside the host.
@@ -900,7 +939,7 @@ namespace coop {
                 coop::world::Reset();
                 TO1_LOG("[coop] host life %u -> reloading the host's task with it\n", g_where.life);
                 Flash("The host respawned - reloading with them...");
-                DEBUG::PLAY_TASK(g_where.w.node, g_where.w.task, 0);
+                PlayTaskFromMod(g_where.w.node, g_where.w.task);
                 return;
             }
             if (!inPart) {
@@ -927,7 +966,7 @@ namespace coop {
                     Flash("The host is still behind - taking you back to them...");
                     g_where.loadIssued = true;
                     g_where.loadAt = g_clock;
-                    DEBUG::PLAY_TASK(g_where.w.node, g_where.w.task, 0);
+                    PlayTaskFromMod(g_where.w.node, g_where.w.task);
                     return;
                 }
                 g_where.aheadSince = -1.0f;
@@ -937,7 +976,7 @@ namespace coop {
                     TO1_LOG("[coop] loading the host's task %016llX / %016llX\n",
                         static_cast<unsigned long long>(g_where.w.node), static_cast<unsigned long long>(g_where.w.task));
                     Flash("Loading the host's game...");
-                    DEBUG::PLAY_TASK(g_where.w.node, g_where.w.task, 0);
+                    PlayTaskFromMod(g_where.w.node, g_where.w.task);
                 }
                 return;
             }
@@ -1256,7 +1295,7 @@ namespace coop {
             g_testBlockSaves = true;
             TO1_LOG("[test] boot_task: loading %s / %s (saving off for this session)\n", g_cfg.bootNode.c_str(), g_cfg.bootTask.c_str());
             Flash("Test boot: loading the test area (saving off)");
-            DEBUG::PLAY_TASK(ToStringId64(g_cfg.bootNode.c_str()), ToStringId64(g_cfg.bootTask.c_str()), 0);
+            PlayTaskFromMod(ToStringId64(g_cfg.bootNode.c_str()), ToStringId64(g_cfg.bootTask.c_str()));
         }
 
         // Runs the discovery probe once per level, a few seconds after the player appears, so a
@@ -1565,6 +1604,7 @@ namespace coop {
         AutoProbe();
         LogWhereWeAre();
         TickAiIgnore();
+        TickCloseMenuAfterLoad();
         TickBootTask();
         TickMoveSweep();
         LobbyTick();
@@ -1578,7 +1618,7 @@ namespace coop {
         const bool block = guest || g_testBlockSaves;
         if (block != g_blockSaves.load(std::memory_order_relaxed)) {
             g_blockSaves.store(block, std::memory_order_relaxed);
-            TO1_LOG("[coop] saving %s\n", block ? "OFF (guest in the host's game)" : "back ON");
+            TO1_LOG("[coop] saving %s\n", !block ? "back ON" : guest ? "OFF (guest in the host's game)" : "OFF (test session)");
         }
         static int s_shownBlocked = 0;
         const int blocked = g_savesBlocked.load(std::memory_order_relaxed);
