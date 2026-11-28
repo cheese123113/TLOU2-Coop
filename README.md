@@ -95,7 +95,7 @@ friendlyfire=0  ; 1 = your bullets hurt your partner (the host's setting counts 
 | M5 | **No Return** co-op: play roguelike runs together (same encounters, shared waves, run rewards) | planned |
 
 Test keys still in the builds (will be removed): **F10** spawns a test copy of yourself
-(Shift+F10: save-block test), **Shift+F6** a partner-melee-hit test on the nearest enemy, **F9** writes a spawner dump to the log (Shift+F9: chapter reload
+(Shift+F10: save-block test), **Shift+F6** a partner-melee-hit test on the nearest enemy, **F2** loads Naughty Dog's leftover melee test map (`fpark-canned-melee-test`), **F9** writes a spawner dump to the log (Shift+F9: chapter reload
 test), **F11** an enemy movement test.
 
 ## Building

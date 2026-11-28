@@ -1176,6 +1176,92 @@ namespace coop {
             }
         }
 
+        // ---------------------------------------------------------------- F2: dev melee test map
+        // The retail game still ships Naughty Dog's "fpark-canned-melee-test" level (pak68.txt:
+        // Ellie, a militia male with a one-handed melee weapon, a pistol). No task loads it, so
+        // F2 asks the engine to (load-level), waits for it to join the loaded levels, logs every
+        // spawner in it, moves the player to its player start (or its first spawner) and spawns
+        // its NPCs -- a quiet place to test melee sync and the Shift+F6 hit replay.
+        constexpr const char* kMeleeTestLevel = "fpark-canned-melee-test";
+        struct TestLevelLoad {
+            bool active = false;
+            float startedAt = 0.0f, nextCheck = 0.0f, foundAt = -1.0f;
+            std::vector<uintptr_t> before;                 // levels loaded when F2 was pressed
+            uintptr_t level = 0;
+        } g_testLevel;
+
+        void StartMeleeTestLevel()
+        {
+            g_testLevel = TestLevelLoad{};
+            LoadedLevels(g_testLevel.before);
+            g_testLevel.active = true;
+            g_testLevel.startedAt = g_clock;
+            TO1_LOG("[testmap] F2: load-level \"%s\" (%zu levels loaded now)\n", kMeleeTestLevel, g_testLevel.before.size());
+            Flash("F2: loading the dev melee test map...");
+            MEMORY::LOAD_LEVEL(kMeleeTestLevel);
+        }
+
+        void TickMeleeTestLevel()
+        {
+            TestLevelLoad& t = g_testLevel;
+            if (!t.active || g_clock < t.nextCheck) return;
+            t.nextCheck = g_clock + 0.5f;
+            if (!t.level) {
+                std::vector<uintptr_t> now;
+                LoadedLevels(now);
+                for (uintptr_t l : now)
+                    if (std::find(t.before.begin(), t.before.end(), l) == t.before.end()) { t.level = l; break; }
+                if (!t.level) {
+                    if (g_clock - t.startedAt > 30.0f) {
+                        t.active = false;
+                        TO1_LOG("[testmap] no new level after 30 s -- the engine did not load \"%s\"\n", kMeleeTestLevel);
+                        Flash("F2: the test map did not load (see the log)");
+                    }
+                    return;
+                }
+                t.foundAt = g_clock;
+                TO1_LOG("[testmap] new level %p appeared after %.1f s\n", reinterpret_cast<void*>(t.level), g_clock - t.startedAt);
+                return;
+            }
+            if (g_clock - t.foundAt < 3.0f) return;        // let its spawners settle
+            t.active = false;
+
+            std::vector<uintptr_t> sps;
+            LevelSpawners(t.level, sps);
+            TO1_LOG("[testmap] %zu spawners in the new level:\n", sps.size());
+            StringId64 start = 0, first = 0;
+            std::vector<StringId64> npcs;
+            for (uintptr_t sp : sps) {
+                const StringId64 sid = SpawnerSid(sp);
+                if (!sid) continue;
+                const std::string name = SpawnerName(sp);
+                const StringId64 type = SpawnerProcessType(sp);
+                const Vector3 p = LOCATOR::GET_LOCATOR_POSITION(LOCATOR::GET_SPAWNER_LOCATOR(sid));
+                TO1_LOG("[testmap]   %016llX \"%s\" type %016llX art \"%s\" at %.1f %.1f %.1f\n",
+                    static_cast<unsigned long long>(sid), name.c_str(), static_cast<unsigned long long>(type),
+                    SpawnerArtGroup(sp).c_str(), p.x, p.y, p.z);
+                if (!first) first = sid;
+                if (!start && (name.find("player") != std::string::npos || name.rfind("cp-", 0) == 0 || name.find("start") != std::string::npos))
+                    start = sid;
+                if (type == 0x99ABC3A158822080ull || name.rfind("npc-", 0) == 0) npcs.push_back(sid);
+            }
+            const StringId64 dest = start ? start : first;
+            if (!dest) {
+                TO1_LOG("[testmap] no spawner to stand at -- not moving the player\n");
+                Flash("F2: test map loaded, but it has no spawners (see the log)");
+                return;
+            }
+            const uintptr_t loc = LOCATOR::GET_SPAWNER_LOCATOR(dest);
+            TeleportPlayer(LOCATOR::GET_LOCATOR_POSITION(loc), LOCATOR::GET_LOCATOR_ROTATION(loc));
+            TO1_LOG("[testmap] player moved to %016llX (%s)\n", static_cast<unsigned long long>(dest), start ? "player start" : "first spawner");
+            for (StringId64 n : npcs) {
+                const uintptr_t nl = LOCATOR::GET_SPAWNER_LOCATOR(n);
+                const StringId64 npc = ENTITY::SPAWN_ENTITY(n, LOCATOR::GET_LOCATOR_POSITION(nl), LOCATOR::GET_LOCATOR_ROTATION(nl), 0);
+                TO1_LOG("[testmap] spawn %016llX -> %016llX\n", static_cast<unsigned long long>(n), static_cast<unsigned long long>(npc));
+            }
+            Flash("F2: you are in the dev melee test map");
+        }
+
         // Runs the discovery probe once per level, a few seconds after the player appears, so a
         // test run's log always has the spawner list without anyone pressing F9.
         void AutoProbe()
@@ -1422,6 +1508,7 @@ namespace coop {
                     StartSession(Want::Host);
             }
             if (Pressed(VK_F8)) StartSession(Want::Join);
+            if (Pressed(VK_F2) && ENTITY::DOES_EXIST(SID("player"))) StartMeleeTestLevel();   // dev melee test map
             if (Pressed(VK_F6)) {
                 // Shift+F6 (solo test): the nearest enemy takes a "partner melee hit" from the F10
                 // test Ellie, through the path a real partner's melee hit takes.
@@ -1480,6 +1567,7 @@ namespace coop {
 
         AutoProbe();
         LogWhereWeAre();
+        TickMeleeTestLevel();
         TickMoveSweep();
         LobbyTick();
         coop::world::Tick(TIME::GET_DELTA_TIME());
