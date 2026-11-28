@@ -22,6 +22,12 @@ namespace net::engine {
     // (the engine accepts it from the player; an NPC puppet of the enemy's faction is refused),
     // coming from `posSource`'s position (the partner's puppet: the enemy reacts towards it).
     bool FireAttackEx(uintptr_t target, uintptr_t identity, uintptr_t posSource, uint64_t weapon, float damage, int kind);
+    // Co-op: a melee attack carrying what a real one names -- the weapon (+0x20), its melee class
+    // (+0x1C / +0x34: 0x14 blade, 0xD 1h blunt) and the melee move (+0x968, e.g.
+    // "ellie-1h-blunt-light-1-far"), which the old layout's position block overwrote. No pointers.
+    // withFlags also sets the melee flag bytes seen in real attacks (+0x8A8 / +0x8B8 / +0x8C0).
+    bool FireMeleeAttack(uintptr_t target, uintptr_t identity, uint64_t weapon, uint32_t meleeClass,
+        uint64_t move, float damage, bool withFlags);
     constexpr uint32_t kStateDescDeath = 0x35BD410;
 
     // Fix for puppet weapon in hands

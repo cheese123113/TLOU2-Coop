@@ -560,20 +560,30 @@ namespace coop::enemies {
         const uintptr_t player = static_cast<uintptr_t>(DcManager::LookupObject(SID("player")));
         if (!target || !player) return;
 
-        // Odd presses: the melee attack alone; even presses: the bullet attack alone -- 10 damage
-        // each, logged with the health before / after (a health drop = the attack landed).
+        // Each press tries the next attack (1 -> 2 -> 3 -> 1 ...), 10 damage, logged first (a
+        // crash then names the culprit) and with the health before / after:
+        //   1 melee with the move + weapon class, no pointers, no flag bytes
+        //   2 the same with the melee flag bytes
+        //   3 the old-layout bullet (reference: lands, looks like a gunshot)
+        // The move / weapon come from the last real melee hit you landed (else a hammer swing).
         static int press = 0;
-        const int kind = (press++ % 2 == 0) ? 1 : 0;
+        const int variant = press++ % 3 + 1;
+        uint64_t mWeapon = 0, mMove = 0; uint32_t mClass = 0;
+        net::hooks::LastLocalMelee(mWeapon, mClass, mMove);
+        if (!mMove) { mWeapon = SID("hammer-scar"); mClass = 0xD; mMove = SID("ellie-1h-blunt-light-1-far"); }
         uint64_t weapon = net::engine::GetPlayerWeaponId(player);
         if (!weapon) weapon = SID("pistol-beretta");
         const float before = ENTITY::GET_HEALTH(best);
-        TO1_LOG("[enemies] Shift+F6: trying a %s attack on %016llX (health %.1f)\n", kind ? "melee" : "bullet",
-            static_cast<unsigned long long>(best), before);
+        static const char* kNames[] = { "", "melee (move, no flags)", "melee (move + flags)", "bullet" };
+        TO1_LOG("[enemies] Shift+F6: trying %s on %016llX (health %.1f), move %016llX class %X weapon %016llX\n",
+            kNames[variant], static_cast<unsigned long long>(best), before, static_cast<unsigned long long>(mMove), mClass,
+            static_cast<unsigned long long>(mWeapon));
         net::hooks::AllowReplayDamage(true);
-        net::engine::FireAttackEx(target, player, from, weapon, 10.0f, kind);
+        if (variant == 3) net::engine::FireAttackEx(target, player, from, weapon, 10.0f, 0);
+        else net::engine::FireMeleeAttack(target, player, mWeapon, mClass, mMove, 10.0f, variant == 2);
         net::hooks::AllowReplayDamage(false);
         const float after = ENTITY::GET_HEALTH(best);
-        TO1_LOG("[enemies] Shift+F6: %s attack %s, health %.1f -> %.1f%s\n", kind ? "melee" : "bullet",
+        TO1_LOG("[enemies] Shift+F6: %s %s, health %.1f -> %.1f%s\n", kNames[variant],
             after < before - 0.01f ? "LANDED" : "did nothing", before, after, IsDead(best) ? " (dead)" : "");
         g_known[best].health = ENTITY::GET_HEALTH(best);   // not reported to a partner as our own hit
     }

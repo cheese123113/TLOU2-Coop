@@ -204,6 +204,48 @@ namespace net::engine {
         return result != 0;
     }
 
+    bool FireMeleeAttack(uintptr_t target, uintptr_t identity, uint64_t weapon, uint32_t meleeClass,
+        uint64_t move, float damage, bool withFlags)
+    {
+        if (!target || !identity) return false;
+        auto ctor = (uintptr_t(__fastcall*)(uintptr_t, int))(g_base + 0x394C10);
+        auto fire = (uint8_t(__fastcall*)(uintptr_t, uintptr_t))(g_base + 0x395360);
+
+        uint8_t* ai = (uint8_t*)calloc(1, 2800);
+        ctor((uintptr_t)ai, 1);                                   // kind 1 = melee (+0x18)
+        auto u32 = [&](size_t off, uint32_t v) { memcpy(ai + off, &v, 4); };
+        auto f32 = [&](size_t off, float v) { memcpy(ai + off, &v, 4); };
+
+        *(uintptr_t*)(ai + 0x08) = *(uintptr_t*)(identity + 128); // attacker handle
+        u32(0x10, *(uint32_t*)(identity + 148));                  // attacker instance
+        u32(0x1C, meleeClass);
+        *(uint64_t*)(ai + 0x20) = weapon;
+        u32(0x34, meleeClass);
+        u32(0x38, 4); u32(0x3C, 1);
+        f32(0x40, damage); u32(0x44, 1);
+        memcpy(ai + 0x110, (void*)(target + 256), 32);            // target locator
+        f32(0x150, damage); u32(0x154, meleeClass); u32(0x158, 2);
+        f32(0x960, damage);
+        *(uint64_t*)(ai + 0x968) = move;                          // the melee move
+        f32(0x970, damage); f32(0x974, 1.0f);
+        f32(0x9A0, damage); f32(0x9B0, damage);
+        u32(0xA00, 1);
+        f32(0xA30, damage);
+        memcpy(ai + 0xA50, (void*)(target + 256), 32);            // second target locator copy
+        if (withFlags) {
+            ai[0x8A8] = 1;
+            ai[0x8A9] = static_cast<uint8_t>((ai[0x8A9] & ~0x1B) | 0x04);
+            f32(0x8B8, meleeClass == 0x14 ? 10.0f : 13.0f); f32(0x8BC, 1.0f);
+            f32(0x8C0, meleeClass == 0x14 ? 0.2f : 0.1f);
+        }
+
+        uint8_t result = 0;
+        __try { result = fire((uintptr_t)ai, target); }
+        __except (EXCEPTION_EXECUTE_HANDLER) {}
+        free(ai);
+        return result != 0;
+    }
+
     // Fix for puppet weapon in hands
 
     float GetWeaponIkFade(uintptr_t player)

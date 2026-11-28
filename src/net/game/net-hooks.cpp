@@ -1342,12 +1342,23 @@ namespace net::hooks {
     // attack carries beyond what FireAttackEx fills in. Our own replayed attacks are skipped.
     static SafetyHookInline g_hkMeleeProbe;
     static std::atomic<int> g_meleeProbeLogs{ 0 };
+    static std::atomic<uint64_t> g_lastMeleeWeapon{ 0 }, g_lastMeleeMove{ 0 };
+    static std::atomic<uint32_t> g_lastMeleeClass{ 0 };
+    void LastLocalMelee(uint64_t& weapon, uint32_t& meleeClass, uint64_t& move)
+    {
+        weapon = g_lastMeleeWeapon.load(); meleeClass = g_lastMeleeClass.load(); move = g_lastMeleeMove.load();
+    }
     static __int64 __fastcall hk_MeleeProbe(uintptr_t ai, uintptr_t victim)
     {
         if (ai && victim && !g_allowReplayDamage.load(std::memory_order_relaxed)) {
             __try {
                 const uint32_t kind = *reinterpret_cast<const uint32_t*>(ai + 0x18);
                 const uintptr_t local = NetPlayers::LocalPtr();
+                if (kind == 1 && local && AttackerFromAttackInfo(ai) == local && *reinterpret_cast<const uint64_t*>(ai + 0x968)) {
+                    g_lastMeleeWeapon.store(*reinterpret_cast<const uint64_t*>(ai + 0x20));
+                    g_lastMeleeClass.store(*reinterpret_cast<const uint32_t*>(ai + 0x1C));
+                    g_lastMeleeMove.store(*reinterpret_cast<const uint64_t*>(ai + 0x968));
+                }
                 if (kind == 1 && local && AttackerFromAttackInfo(ai) == local && g_meleeProbeLogs.fetch_add(1) < 3) {
                     TO1_LOG("[melee-probe] local melee attack on %llx: damage %.1f weapon %016llX\n",
                         static_cast<unsigned long long>(victim), *reinterpret_cast<const float*>(ai + 0x40),
