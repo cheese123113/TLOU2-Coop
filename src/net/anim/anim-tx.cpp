@@ -281,11 +281,14 @@ void CaptureLocalList(uintptr_t a3, uint32_t cursorIn, uint32_t cursorOut) {
 //  in g_txCmd) plus the aim spine. Also publishes the local player's AnimControl
 //  and skeleton-matched AnimTable, which BOTH roles need. Called from replication.
 // ============================================================================
+static uint64_t g_captureSource = 0;   // 0 = the local player
+void NetSetCaptureSource(uint64_t objSid) { g_captureSource = objSid; }
+
 void NetCaptureLocalAnim(float* spine20)
 {
     for (int i = 0; i < 20; ++i) spine20[i] = 0.0f;
 
-    uint64_t pl = DcManager::LookupObject(SID("player"));
+    uint64_t pl = DcManager::LookupObject(g_captureSource ? g_captureSource : SID("player"));
     if (!pl) { g_localAC = 0; g_localAnimTable = 0; return; }
 
     // publish the local player's AnimControl so the hook knows which call to capture,

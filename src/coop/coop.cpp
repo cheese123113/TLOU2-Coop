@@ -10,6 +10,8 @@
 #include "net-engine.hpp"
 #include "net-hooks.hpp"
 #include "net-player.hpp"
+#include "anim.hpp"
+#include "net-protocol.hpp"
 #include "log.hpp"
 #include "sid/sidbase.hpp"
 #include "loader/config.hpp"
@@ -1270,6 +1272,81 @@ namespace coop {
             }
         }
 
+        // ---------------------------------------------------------------- Shift+F6: animation mirror
+        // Solo test for copying an enemy's animation (the planned partner-melee fix): enemy B
+        // copies enemy A's animation every frame, through exactly the pipeline the network
+        // uses for the partner character -- capture A's AnimCmdList, pack it, unpack it into a
+        // spare replay slot, replay it onto B -- with the network step skipped. Melee A and B
+        // should react the same. Alone only (the capture source is borrowed from the player).
+        StringId64 g_mirrorSrc = 0, g_mirrorDst = 0;
+        uint32_t   g_mirrorSeq = 0;
+        float      g_mirrorNextLog = 0.0f;
+        int        g_mirrorFrames = 0, g_mirrorLists = 0;
+        constexpr int kMirrorSlot = kMaxNetPlayers - 1;   // never a real partner's slot when alone
+
+        bool NpcDead(StringId64 npc) { return DC::Call<"character-is-dead?">(npc) != 0; }
+
+        void StopMirror(const char* why)
+        {
+            if (!g_mirrorSrc) return;
+            NetClearRemoteAnim(kMirrorSlot, true);
+            NetSetSlotStreamAlive(kMirrorSlot, false);
+            NetSetCaptureSource(0);
+            TO1_LOG("[mirror] stopped (%s) after %d frames, %d lists\n", why, g_mirrorFrames, g_mirrorLists);
+            Flash("Shift+F6: mirror test off");
+            g_mirrorSrc = g_mirrorDst = 0;
+        }
+
+        void StartMirror()
+        {
+            if (net::session::IsRunning()) { Flash("Shift+F6: mirror test works alone only (not in a co-op session)"); return; }
+            const Vector3 me = LOCATOR::GET_TRANSFORM(SID("player")).Position;
+            std::vector<std::pair<float, StringId64>> cands;
+            for (StringId64 npc : FEDRA::GET_ALL_ENEMIES()) {
+                if (!npc || !ENTITY::DOES_EXIST(npc) || NpcDead(npc) || npc == g_testPuppet) continue;
+                const Vector3 p = LOCATOR::GET_TRANSFORM(npc).Position;
+                const float d = (p.x - me.x) * (p.x - me.x) + (p.y - me.y) * (p.y - me.y) + (p.z - me.z) * (p.z - me.z);
+                if (d < 30.0f * 30.0f) cands.push_back({ d, npc });
+            }
+            std::sort(cands.begin(), cands.end());
+            if (cands.size() < 2) { Flash("Shift+F6: need two living enemies within 30 m"); TO1_LOG("[mirror] need two enemies within 30 m (%zu)\n", cands.size()); return; }
+            g_mirrorSrc = cands[0].second;          // the nearest: the one you melee
+            g_mirrorDst = cands[1].second;          // the next one copies it
+            g_mirrorSeq = 0; g_mirrorFrames = 0; g_mirrorLists = 0; g_mirrorNextLog = 0.0f;
+            NetSetCaptureSource(g_mirrorSrc);
+            TO1_LOG("[mirror] start: %016llX (nearest, %.1f m) -> copied by %016llX (%.1f m)\n",
+                static_cast<unsigned long long>(g_mirrorSrc), std::sqrt(cands[0].first),
+                static_cast<unsigned long long>(g_mirrorDst), std::sqrt(cands[1].first));
+            Flash("Shift+F6: mirror on - the 2nd nearest enemy copies the nearest");
+        }
+
+        void TickMirror()
+        {
+            if (!g_mirrorSrc) return;
+            if (net::session::IsRunning()) { StopMirror("a co-op session started"); return; }
+            if (!ENTITY::DOES_EXIST(g_mirrorSrc) || !ENTITY::DOES_EXIST(g_mirrorDst)) { StopMirror("an enemy is gone"); return; }
+            // a dying / dead NPC must not keep being replayed onto (Twelve Weeks: corrupts its joints)
+            if (NpcDead(g_mirrorDst)) { StopMirror("the copying enemy died"); return; }
+            if (NpcDead(g_mirrorSrc)) { StopMirror("the source enemy died"); return; }
+
+            float spine[20];
+            NetCaptureLocalAnim(spine);                 // captures g_mirrorSrc (capture source)
+            static uint8_t buf[kMaxAnimCmdBytes];
+            uint32_t skelId = 0; uint8_t epoch = 0;
+            const uint16_t bits = NetGetLocalAnimCmds(buf, static_cast<uint16_t>(kMaxAnimCmdBytes), &skelId, &epoch);
+            if (bits && NetAnimRxIngest(kMirrorSlot, ++g_mirrorSeq)) {
+                NetSetRemoteAnimCmds(kMirrorSlot, buf, bits, skelId, epoch, static_cast<uint32_t>(GetTickCount64() & 0xFFFFFFFFull));
+                ++g_mirrorLists;
+            }
+            NetApplyRemoteAnim(kMirrorSlot, g_mirrorDst, spine);
+            NetSetSlotStreamAlive(kMirrorSlot, true);
+            ++g_mirrorFrames;
+            if (g_clock >= g_mirrorNextLog) {
+                g_mirrorNextLog = g_clock + 2.0f;
+                TO1_LOG("[mirror] frames %d, lists %d (last %u bits, skel %08X)\n", g_mirrorFrames, g_mirrorLists, bits, skelId);
+            }
+        }
+
         // ---------------------------------------------------------------- boot_task (testing)
         // boot_task=<node>/<task> in tlou2-coop.ini: a few seconds after the main menu is up, the
         // game loads that story task (task-play-debug!, the call menu joining uses). Saving is
@@ -1549,9 +1626,8 @@ namespace coop {
                 // Shift+F6 (solo test): the nearest enemy takes a "partner melee hit" from the F10
                 // test Ellie, through the path a real partner's melee hit takes.
                 if ((GetAsyncKeyState(VK_SHIFT) & 0x8000) && ENTITY::DOES_EXIST(SID("player"))) {
-                    Flash(g_testPuppet ? "Shift+F6: partner melee hit test on the nearest enemy"
-                                       : "Shift+F6: hit test (press F10 first so the hit comes from the test Ellie)");
-                    coop::enemies::TestPartnerHit(g_testPuppet);
+                    if (g_mirrorSrc) StopMirror("Shift+F6");
+                    else StartMirror();
                 }
                 else StopSession();
             }
@@ -1604,6 +1680,7 @@ namespace coop {
         AutoProbe();
         LogWhereWeAre();
         TickAiIgnore();
+        TickMirror();
         TickCloseMenuAfterLoad();
         TickBootTask();
         TickMoveSweep();

@@ -35,6 +35,10 @@ void NetAnimTickEarly();
 // anim state whose baked root motion drags the puppet against the replicated locator.
 // The AnimCmdList itself rides in its own packet (see NetGet/NetSetRemoteAnimCmds).
 void NetCaptureLocalAnim(float* spine20);
+// Co-op: capture another character's AnimCmdList instead of the local player's (0 = the player
+// again). Used by the solo animation mirror test (an enemy's list replayed onto another enemy)
+// and later for sending an enemy's hit reaction to the partner. GAME THREAD.
+void NetSetCaptureSource(uint64_t objSid);
 // PER REMOTE SLOT (0..kMaxNetPlayers-1): each remote puppet has its own replay state, so a 2v2's
 // three remotes each animate from their own replicated list. slot = the ORIGINAL author's net slot.
 void NetApplyRemoteAnim(int slot, uint64_t npcSid, const float* spine20);
@@ -144,4 +148,4 @@ void     NetAnimTxReset();
 // Clear one sender's replay bank + learned rx dictionary + rx sequence baseline (peer
 // dropped / that slot restarted).
 void     NetAnimClearSlot(int slot);
-void NetPuppetAnimInstall();
+void NetPuppetAnimInstall();

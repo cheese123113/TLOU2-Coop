@@ -539,56 +539,6 @@ namespace coop::enemies {
         if (senderSlot < kMaxNetPlayers) g_lastPartnerShot[senderSlot] = g_clock;
     }
 
-    // Shift+F6 (solo test): the nearest living enemy within 15 m takes a "partner melee hit" of
-    // 20 health from the F10 test Ellie (without her: a flinch only), through the same path a
-    // partner's melee hit takes.
-    void TestPartnerHit(StringId64 testPuppet)
-    {
-        const Vector3 me = LOCATOR::GET_TRANSFORM(SID("player")).Position;
-        StringId64 best = 0;
-        float bestD = 15.0f * 15.0f;
-        for (StringId64 npc : FEDRA::GET_ALL_ENEMIES()) {
-            if (!npc || IsPuppet(npc) || npc == testPuppet || !ENTITY::DOES_EXIST(npc) || IsDead(npc)) continue;
-            const Vector3 p = LOCATOR::GET_TRANSFORM(npc).Position;
-            const float d = (p.x - me.x) * (p.x - me.x) + (p.y - me.y) * (p.y - me.y) + (p.z - me.z) * (p.z - me.z);
-            if (d < bestD) { bestD = d; best = npc; }
-        }
-        if (!best) { TO1_LOG("[enemies] Shift+F6: no living enemy within 15 m\n"); return; }
-        const uintptr_t from = (testPuppet && ENTITY::DOES_EXIST(testPuppet))
-            ? static_cast<uintptr_t>(DcManager::LookupObject(testPuppet)) : 0;
-        const uintptr_t target = static_cast<uintptr_t>(DcManager::LookupObject(best));
-        const uintptr_t player = static_cast<uintptr_t>(DcManager::LookupObject(SID("player")));
-        if (!target || !player) return;
-
-        // Each press tries the next attack (1 -> 2 -> 3 -> 1 ...), 10 damage, logged first (a
-        // crash then names the culprit) and with the health before / after:
-        //   1 melee with the move + weapon class, no pointers, no flag bytes
-        //   2 the same with the melee flag bytes
-        //   3 the old-layout bullet (reference: lands, looks like a gunshot)
-        // The move / weapon: an ordinary 1h-blunt light swing with a hammer (from a real hit).
-        static int press = 0;
-        const int variant = press++ % 3 + 1;
-        uint64_t mWeapon = 0, mMove = 0; uint32_t mClass = 0;
-        // Always a known ordinary swing from the friend's log: a finisher / synced move of our
-        // own (recorded by the melee probe) replayed on another enemy crashed the game.
-        mWeapon = SID("hammer-scar"); mClass = 0xD; mMove = SID("ellie-1h-blunt-light-1-far");
-        uint64_t weapon = net::engine::GetPlayerWeaponId(player);
-        if (!weapon) weapon = SID("pistol-beretta");
-        const float before = ENTITY::GET_HEALTH(best);
-        static const char* kNames[] = { "", "melee (move, no flags)", "melee (move + flags)", "bullet" };
-        TO1_LOG("[enemies] Shift+F6: trying %s on %016llX (health %.1f), move %016llX class %X weapon %016llX\n",
-            kNames[variant], static_cast<unsigned long long>(best), before, static_cast<unsigned long long>(mMove), mClass,
-            static_cast<unsigned long long>(mWeapon));
-        net::hooks::AllowReplayDamage(true);
-        if (variant == 3) net::engine::FireAttackEx(target, player, from, weapon, 10.0f, 0);
-        else net::engine::FireMeleeAttack(target, player, mWeapon, mClass, mMove, 10.0f, variant == 2);
-        net::hooks::AllowReplayDamage(false);
-        const float after = ENTITY::GET_HEALTH(best);
-        TO1_LOG("[enemies] Shift+F6: %s %s, health %.1f -> %.1f%s\n", kNames[variant],
-            after < before - 0.01f ? "LANDED" : "did nothing", before, after, IsDead(best) ? " (dead)" : "");
-        g_known[best].health = ENTITY::GET_HEALTH(best);   // not reported to a partner as our own hit
-    }
-
     void OnEvent(uint8_t senderSlot, const uint8_t* data, uint8_t size)
     {
         const size_t n = size / sizeof(CoopEnemyEntry);

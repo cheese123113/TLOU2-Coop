@@ -20,9 +20,8 @@ namespace coop::enemies {
     void OnEnemyFire(uint8_t senderSlot, const uint8_t* data, uint8_t size);   // partner: copy fires
 
     // Partner hit reactions: a partner's gunshot / arrow arrived (its replay already makes the
-    // enemy react); any other partner hit is replayed with a hit reaction. Shift+F6 tests it solo.
+    // enemy react); any other partner hit is replayed with a (gunshot-style) hit reaction.
     void NotePartnerShot(uint8_t senderSlot);
-    void TestPartnerHit(StringId64 testPuppet);
     void Reset();                                          // session start / end
 
     // Engine-thread safe: is this process one of our followers? (root-locator guard)
