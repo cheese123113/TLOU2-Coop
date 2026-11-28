@@ -1279,6 +1279,8 @@ namespace coop {
         // spare replay slot, replay it onto B -- with the network step skipped. Melee A and B
         // should react the same. Alone only (the capture source is borrowed from the player).
         StringId64 g_mirrorSrc = 0, g_mirrorDst = 0;
+        std::vector<StringId64> g_mirrorCands;           // copier candidates, nearest first
+        size_t g_mirrorCand = 0;
         uint32_t   g_mirrorSeq = 0;
         float      g_mirrorNextLog = 0.0f;
         int        g_mirrorFrames = 0, g_mirrorLists = 0;
@@ -1312,7 +1314,10 @@ namespace coop {
             std::sort(cands.begin(), cands.end());
             if (cands.size() < 2) { Flash("Shift+F6: need two living enemies within 30 m"); TO1_LOG("[mirror] need two enemies within 30 m (%zu)\n", cands.size()); return; }
             g_mirrorSrc = cands[0].second;          // the nearest: the one you melee
-            g_mirrorDst = cands[1].second;          // the next one copies it
+            g_mirrorCands.clear();
+            for (size_t i = 1; i < cands.size(); ++i) g_mirrorCands.push_back(cands[i].second);
+            g_mirrorCand = 0;
+            g_mirrorDst = g_mirrorCands[0];         // the next one copies it (if its skeleton matches)
             g_mirrorSeq = 0; g_mirrorFrames = 0; g_mirrorLists = 0; g_mirrorNextLog = 0.0f;
             NetAnimClearSlot(kMirrorSlot);              // fresh sequence baseline (restarts were rejected for seconds)
             NetSetEnemyCaptureSource(g_mirrorSrc);      // the enemy channel, exactly as a melee stream uses it
@@ -1333,6 +1338,23 @@ namespace coop {
 
             // the same path a partner's melee reaction takes: enemy channel, raw list, own-rig slot
             if (!NetSetSlotOwnRig(kMirrorSlot, g_mirrorDst)) { ++g_mirrorFrames; return; }   // rig learned next frame
+            // In co-op the copy is the SAME enemy (same skeleton). Two different enemies may not
+            // share one (male / female / brute): then try the next nearest as the copier.
+            {
+                static uint8_t probeBuf[64];
+                uint32_t srcSkel = 0;
+                NetGetEnemyAnimCmdsRaw(probeBuf, 0, &srcSkel);   // 0 bytes: just the source skeleton id
+                const uint32_t dstSkel = NetSlotOwnRigSkelId(kMirrorSlot);
+                if (srcSkel && dstSkel && srcSkel != dstSkel) {
+                    TO1_LOG("[mirror] %016llX has another skeleton (%08X, source %08X) -- trying the next enemy\n",
+                        static_cast<unsigned long long>(g_mirrorDst), dstSkel, srcSkel);
+                    NetClearRemoteAnim(kMirrorSlot, true);
+                    NetClearSlotOwnRig(kMirrorSlot);
+                    if (++g_mirrorCand >= g_mirrorCands.size()) { StopMirror("no enemy nearby shares the source's skeleton"); return; }
+                    g_mirrorDst = g_mirrorCands[g_mirrorCand];
+                    return;
+                }
+            }
             float spine[20];
             NetGetObjectSpine(g_mirrorSrc, spine);
             static uint8_t buf[kMaxAnimCmdBytes];

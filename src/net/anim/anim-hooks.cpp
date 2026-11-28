@@ -124,6 +124,11 @@ static uintptr_t __fastcall hk_CreateAnimCmds(uintptr_t a1, uintptr_t a2, uintpt
             _ReadWriteBarrier();                                   // finish the copy before re-reading gen
             if (rep.rxGen == gen0) {                               // no writer lapped us -> copy is untorn
                 uintptr_t hdr = ReplayOntoNpc(a1, a2, a3, rep.rxScratch, (int)len, rxSlot);
+                if (!hdr && rep.ownRig) {
+                    static volatile long s_ownReplayFails = 0;
+                    if (_InterlockedIncrement(&s_ownReplayFails) <= 6)
+                        TO1_LOG("[enemy-anim] slot %d replay failed (%ld dwords) -- holding last good / bind pose\n", rxSlot, len);
+                }
                 if (hdr) {
                     memcpy(rep.rxLast, rep.rxScratch, (size_t)len * 4);   // promote: last-good
                     rep.rxLastLen = len;

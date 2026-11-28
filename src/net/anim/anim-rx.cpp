@@ -892,7 +892,13 @@ void NetSetRemoteAnimCmds(int senderSlot, const uint8_t* data, uint16_t bits, ui
     // last good pose -- spatially coherent beats temporally fresh.
     static uint32_t s_decoded[kMaxAnimCmdDwords];
     const uint32_t len = NetAnimDecode(senderSlot, data, bits, epoch, s_decoded, kMaxAnimCmdDwords);
-    if (len == 0) return;
+    // co-op enemy copies: say why a list is dropped (first few of each kind)
+    static int s_ownRejects[4] = {};
+    auto ownReject = [&](int why, const char* what, uint32_t a, uint32_t b) {
+        if (rep.ownRig && s_ownRejects[why]++ < 6)
+            TO1_LOG("[enemy-anim] slot %d list dropped: %s (%08X / %08X)\n", senderSlot, what, a, b);
+    };
+    if (len == 0) { ownReject(0, "decode failed", bits, 0); return; }
     const uint32_t* cmd = s_decoded;
     if (len > (uint32_t)kMaxAnimCmdDwords) return;
 
@@ -900,8 +906,11 @@ void NetSetRemoteAnimCmds(int senderSlot, const uint8_t* data, uint16_t bits, ui
     // skeleton. If the sender animated a different rig, the engine would soft-fail
     // each clip to an empty pose -- the exact input that poisons a one-sided blend.
     uintptr_t skel = rep.ownRig ? (uintptr_t)rep.ownSkel : (uintptr_t)g_localSkel;   // co-op enemy copy: its own rig
-    if (!San(skel) || skelId == 0 || Rd<uint32_t>(skel + 52) != skelId) return;
-    if (!AnimListValid(cmd, len)) return;
+    if (!San(skel) || skelId == 0 || Rd<uint32_t>(skel + 52) != skelId) {
+        ownReject(1, "rig mismatch (sender skeleton / ours)", skelId, San(skel) ? Rd<uint32_t>(skel + 52) : 0);
+        return;
+    }
+    if (!AnimListValid(cmd, len)) { ownReject(2, "list invalid", len, 0); return; }
 
     // Translate each feather blend's transmitted StringId64 into a LOCAL heap index,
     // HERE on the game thread: LoginFeatherBlend takes the table lock and allocates
@@ -946,7 +955,7 @@ void NetSetRemoteAnimCmds(int senderSlot, const uint8_t* data, uint16_t bits, ui
     // Re-validate the FINAL form. The feather->blend rewrite above happens after the
     // first AnimListValid, and it changes an opcode and a slot field, so nothing may
     // reach the anim thread that the validator has not seen exactly as it will execute.
-    if (!AnimListValid(s_x, xlen)) return;
+    if (!AnimListValid(s_x, xlen)) { ownReject(3, "list invalid after feather translation", xlen, 0); return; }
 
     // Publish into the INACTIVE bank, then flip. A single shared buffer was torn: the
     // anim thread could read rxCmd part-way through this 4KB copy while the old
@@ -1021,6 +1030,13 @@ bool NetSetSlotOwnRig(int slot, uint64_t npcSid)
     if (San(fg)) rep.ownFg = fg;
     rep.ownRig = 1;
     return San(rep.ownSkel) && San(rep.ownTable);
+}
+
+uint32_t NetSlotOwnRigSkelId(int slot)
+{
+    if (slot < 0 || slot >= kMaxNetPlayers) return 0;
+    const uintptr_t sk = (uintptr_t)s_replay[slot].ownSkel;
+    return San(sk) ? Rd<uint32_t>(sk + 52) : 0;
 }
 
 void NetClearSlotOwnRig(int slot)

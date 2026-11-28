@@ -52,6 +52,7 @@ bool     NetGetObjectSpine(uint64_t objSid, float* spine20);
 // is learned from the NPC's next animation call, so call this every frame until it is).
 bool     NetSetSlotOwnRig(int slot, uint64_t npcSid);
 void     NetClearSlotOwnRig(int slot);
+uint32_t NetSlotOwnRigSkelId(int slot);   // the target NPC's skeleton id (0 = not learned yet)
 // PER REMOTE SLOT (0..kMaxNetPlayers-1): each remote puppet has its own replay state, so a 2v2's
 // three remotes each animate from their own replicated list. slot = the ORIGINAL author's net slot.
 void NetApplyRemoteAnim(int slot, uint64_t npcSid, const float* spine20);
