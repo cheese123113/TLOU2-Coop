@@ -168,56 +168,33 @@ namespace net::engine {
     }
 
     // The attack dispatch (0x395360) wraps the attack info in an "Attack" event and sends it to
-    // the victim at once; it returns whether the victim's handler accepted it. FireAttack's
-    // offsets (2272 / 2384 / 2464 / 2472, from Twelve Weeks) land on fields a real melee attack
-    // uses in build 4188655 (damage copies, hit type, direction -- see the [melee-probe] dumps),
-    // so its attacks are rejected. Variants (Shift+F6 cycles them, the log says which landed):
-    //   1  Twelve Weeks' FireAttack layout (bullet)                     -- the old baseline
-    //   2  bullet, only the fields a real attack fills: header, damage, target locator
-    //   3  melee modelled on real local melee attacks (scalar fields only, no stack pointers)
-    bool FireAttackVariant(int variant, uintptr_t target, uintptr_t identity, uintptr_t posSource, uint64_t weapon, float damage)
+    // the victim at once. Its return value is NOT "accepted": the Shift+F6 test (M3.10) showed
+    // Twelve Weeks' bullet layout returning 0 while the enemy took the damage and played its hit
+    // reaction. Callers judge an attack by the victim's health. A melee attack modelled field by
+    // field on real ones (victim pointers, melee flags at 0x8A8) crashed the game; dropped.
+    //   kind 0  Twelve Weeks' FireAttack layout (bullet)   -- lands, with a hit reaction
+    //   kind 1  the same layout as a melee attack           -- ran without crashing in co-op
+    //                                                          (M3.9); whether it lands: test
+    bool FireAttackEx(uintptr_t target, uintptr_t identity, uintptr_t posSource, uint64_t weapon, float damage, int kind)
     {
         if (!target || !identity) return false;
         if (!posSource) posSource = identity;
-        if (variant == 1) return FireAttack(target, identity, weapon, 0, damage);
 
         auto ctor = (uintptr_t(__fastcall*)(uintptr_t, int))(g_base + 0x394C10);
         auto fire = (uint8_t(__fastcall*)(uintptr_t, uintptr_t))(g_base + 0x395360);
 
-        const int kind = variant == 3 ? 1 : 0;
-        uint8_t* ai = (uint8_t*)calloc(1, 2800);
+        uint8_t* ai = (uint8_t*)calloc(1, 2700);
         ctor((uintptr_t)ai, kind);                                // attack kind at +0x18
 
-        auto u32 = [&](size_t off, uint32_t v) { memcpy(ai + off, &v, 4); };
-        auto f32 = [&](size_t off, float v) { memcpy(ai + off, &v, 4); };
-
-        *(uintptr_t*)(ai + 0x08) = *(uintptr_t*)(identity + 128); // attacker handle
-        u32(0x10, *(uint32_t*)(identity + 148));                  // attacker instance (process +0x94)
-        *(uint64_t*)(ai + 0x20) = weapon;
-        f32(0x40, damage);
-        u32(0x44, 1);
-        memcpy(ai + 0x110, (void*)(target + 256), 32);            // target locator (pos + rot)
-        memcpy(ai + 0xA50, (void*)(target + 256), 32);            // second copy, as real attacks have
-        *(uintptr_t*)(ai + 0x9D0) = target;                       // victim, as real attacks have
-        *(uintptr_t*)(ai + 0x9F0) = target;
-        *(uintptr_t*)(ai + 0xA80) = target;
-        (void)posSource;
-        if (kind == 1) {                                          // melee fields seen in real attacks
-            u32(0x1C, 0xD);
-            u32(0x34, 0xD);
-            u32(0x38, 4);
-            u32(0x3C, 1);
-            f32(0x150, damage); u32(0x154, 0xD); u32(0x158, 2);
-            ai[0x8A8] = 1;
-            ai[0x8A9] = static_cast<uint8_t>((ai[0x8A9] & ~0x1B) | 0x04);
-            f32(0x8B8, 13.0f); f32(0x8BC, 1.0f); f32(0x8C0, 0.1f);
-            f32(0x960, damage);
-            f32(0x970, damage); f32(0x974, 1.0f);
-            f32(0x9A0, damage);
-            f32(0x9B0, damage);
-            u32(0xA00, 1);
-            f32(0xA30, damage);
-        }
+        *(uintptr_t*)(ai + 8) = *(uintptr_t*)(identity + 128);   // attacker handle
+        *(uint32_t*)(ai + 16) = *(uint32_t*)(identity + 148);    // attacker instance
+        *(uint64_t*)(ai + 32) = weapon;
+        *(float*)(ai + 64) = damage;
+        memcpy(ai + 272, (void*)(target + 256), 80);
+        memcpy(ai + 2272, (void*)(target + 256), 80);
+        memcpy(ai + 2384, (void*)(posSource + 256), 80);         // where the hit comes from
+        *(uint32_t*)(ai + 2464) = kind == 0 ? 1 : 0;             // projectile type (bullets only)
+        *(uint64_t*)(ai + 2472) = weapon;
 
         uint8_t result = 0;
         __try { result = fire((uintptr_t)ai, target); }
@@ -225,11 +202,6 @@ namespace net::engine {
 
         free(ai);
         return result != 0;
-    }
-
-    bool FireAttackEx(uintptr_t target, uintptr_t identity, uintptr_t posSource, uint64_t weapon, float damage, int kind)
-    {
-        return FireAttackVariant(kind == 1 ? 3 : 2, target, identity, posSource, weapon, damage);
     }
 
     // Fix for puppet weapon in hands

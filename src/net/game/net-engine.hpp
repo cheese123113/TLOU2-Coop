@@ -22,9 +22,6 @@ namespace net::engine {
     // (the engine accepts it from the player; an NPC puppet of the enemy's faction is refused),
     // coming from `posSource`'s position (the partner's puppet: the enemy reacts towards it).
     bool FireAttackEx(uintptr_t target, uintptr_t identity, uintptr_t posSource, uint64_t weapon, float damage, int kind);
-    // Attack info layouts under test (1 Twelve Weeks bullet, 2 clean bullet, 3 melee).
-    bool FireAttackVariant(int variant, uintptr_t target, uintptr_t identity, uintptr_t posSource, uint64_t weapon, float damage);
-
     constexpr uint32_t kStateDescDeath = 0x35BD410;
 
     // Fix for puppet weapon in hands

@@ -68,7 +68,8 @@ namespace coop::enemies {
             if (target && player) {
                 uint64_t weapon = net::engine::GetPlayerWeaponId(player);
                 if (!weapon) weapon = SID("pistol-beretta");
-                killed = net::engine::FireAttack(target, player, weapon, 0, 1.0e6f);
+                net::engine::FireAttack(target, player, weapon, 0, 1.0e6f);
+                killed = IsDead(npc) || ENTITY::GET_HEALTH(npc) <= 0.0f;   // the return value means nothing
             }
             // The attack is refused for many story NPCs; npc-die is the engine's own death (the
             // call Twelve Weeks' puppet death ladder falls back to), zero health the last resort.
@@ -113,16 +114,20 @@ namespace coop::enemies {
             if (target && attacker && player && local > 1.0f) {
                 uint64_t weapon = net::engine::GetPlayerWeaponId(player);
                 if (!weapon) weapon = SID("pistol-beretta");
-                // small damage: enough for the hit reaction, never a kill (difficulty scales
-                // it); the real health is set right after
-                const float dmg = (std::min)({ local - newHealth, 10.0f, local - 1.0f });
+                // small damage: enough for the hit reaction, never a kill even if difficulty
+                // scales it up; the real health is set right after
+                const float dmg = (std::max)((std::min)({ local - newHealth, 10.0f, (local - 1.0f) * 0.5f }), 0.5f);
                 // Credited to our player (an attack from the partner's puppet -- an NPC that
                 // borrowed an enemy spawner -- counts as friendly and is refused), placed at the
-                // partner so the enemy reacts towards them. Melee first, bullet as fallback.
+                // partner so the enemy reacts towards them. The dispatch's return value means
+                // nothing: an attack landed if the health dropped. Melee first, bullet fallback.
                 net::hooks::AllowReplayDamage(true);
-                reacted = net::engine::FireAttackEx(target, player, attacker, weapon, (std::max)(dmg, 0.5f), 1);
-                if (reacted) how = "melee hit reaction";
-                else if (net::engine::FireAttackEx(target, player, attacker, weapon, (std::max)(dmg, 0.5f), 0)) { reacted = true; how = "bullet hit reaction"; }
+                net::engine::FireAttackEx(target, player, attacker, weapon, dmg, 1);
+                if (ENTITY::GET_HEALTH(npc) < local - 0.01f) { reacted = true; how = "melee hit reaction"; }
+                else {
+                    net::engine::FireAttackEx(target, player, attacker, weapon, dmg, 0);
+                    if (ENTITY::GET_HEALTH(npc) < local - 0.01f) { reacted = true; how = "bullet hit reaction"; }
+                }
                 net::hooks::AllowReplayDamage(false);
             }
             if (!reacted) DC::Call<"npc-flinch">(npc);
@@ -555,22 +560,21 @@ namespace coop::enemies {
         const uintptr_t player = static_cast<uintptr_t>(DcManager::LookupObject(SID("player")));
         if (!target || !player) return;
 
-        // Each press tries the next attack layout (1 -> 2 -> 3 -> 1 ...) and logs whether the
-        // enemy accepted it and whether its health actually dropped (10 damage).
-        static int variant = 0;
-        variant = variant % 3 + 1;
+        // Odd presses: the melee attack alone; even presses: the bullet attack alone -- 10 damage
+        // each, logged with the health before / after (a health drop = the attack landed).
+        static int press = 0;
+        const int kind = (press++ % 2 == 0) ? 1 : 0;
         uint64_t weapon = net::engine::GetPlayerWeaponId(player);
         if (!weapon) weapon = SID("pistol-beretta");
         const float before = ENTITY::GET_HEALTH(best);
-        TO1_LOG("[enemies] Shift+F6: trying attack layout %d on %016llX (health %.1f)\n", variant,
+        TO1_LOG("[enemies] Shift+F6: trying a %s attack on %016llX (health %.1f)\n", kind ? "melee" : "bullet",
             static_cast<unsigned long long>(best), before);
         net::hooks::AllowReplayDamage(true);
-        const bool accepted = net::engine::FireAttackVariant(variant, target, player, from, weapon, 10.0f);
+        net::engine::FireAttackEx(target, player, from, weapon, 10.0f, kind);
         net::hooks::AllowReplayDamage(false);
         const float after = ENTITY::GET_HEALTH(best);
-        TO1_LOG("[enemies] Shift+F6: layout %d %s, health %.1f -> %.1f%s\n", variant,
-            accepted ? "ACCEPTED" : "rejected", before, after, IsDead(best) ? " (dead)" : "");
-        if (!accepted && after >= before) DC::Call<"npc-flinch">(best);
+        TO1_LOG("[enemies] Shift+F6: %s attack %s, health %.1f -> %.1f%s\n", kind ? "melee" : "bullet",
+            after < before - 0.01f ? "LANDED" : "did nothing", before, after, IsDead(best) ? " (dead)" : "");
         g_known[best].health = ENTITY::GET_HEALTH(best);   // not reported to a partner as our own hit
     }
 
