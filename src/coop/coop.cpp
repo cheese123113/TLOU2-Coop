@@ -45,6 +45,7 @@ namespace coop {
             bool overlay = true;
             bool nametags = true;               // partner name above their character
             bool friendlyFire = false;          // players' bullets hurt each other (the host's setting counts)
+            std::string bootNode, bootTask;     // test only: boot_task=<node>/<task>, loaded from the main menu
             uint32_t nrSeed = 0;                // test only: No Return seed to force (nr_seed=<hex>), 0 = off
         };
         Config g_cfg;
@@ -114,6 +115,10 @@ namespace coop {
                 else if (key == "overlay")                g_cfg.overlay = (val != "0");
                 else if (key == "nametags")               g_cfg.nametags = (val != "0");
                 else if (key == "friendlyfire")           g_cfg.friendlyFire = (val == "1");
+                else if (key == "boot_task") {
+                    const size_t slash = val.find('/');
+                    if (slash != std::string::npos) { g_cfg.bootNode = Trim(val.substr(0, slash)); g_cfg.bootTask = Trim(val.substr(slash + 1)); }
+                }
                 else if (key == "nr_seed")                g_cfg.nrSeed = static_cast<uint32_t>(strtoul(val.c_str(), nullptr, 16));
                 else if (key == "spawner") {
                     size_t start = 0;
@@ -1176,90 +1181,82 @@ namespace coop {
             }
         }
 
-        // ---------------------------------------------------------------- F2: dev melee test map
-        // The retail game still ships Naughty Dog's "fpark-canned-melee-test" level (pak68.txt:
-        // Ellie, a militia male with a one-handed melee weapon, a pistol). No task loads it, so
-        // F2 asks the engine to (load-level), waits for it to join the loaded levels, logs every
-        // spawner in it, moves the player to its player start (or its first spawner) and spawns
-        // its NPCs -- a quiet place to test melee sync and the Shift+F6 hit replay.
-        constexpr const char* kMeleeTestLevel = "fpark-canned-melee-test";
-        struct TestLevelLoad {
-            bool active = false;
-            float startedAt = 0.0f, nextCheck = 0.0f, foundAt = -1.0f;
-            std::vector<uintptr_t> before;                 // levels loaded when F2 was pressed
-            uintptr_t level = 0;
-        } g_testLevel;
+        // ---------------------------------------------------------------- F2: enemies ignore you
+        // Solo testing aid: every enemy is made blind and deaf (the engine's npc-set-blind /
+        // npc-set-deaf, as on the partner's enemy copies), re-applied every second so enemies
+        // that spawn later are covered too. F2 again gives them their senses back. Followers
+        // (the partner's enemy copies) are left alone: they are blind and deaf on purpose.
+        bool g_aiIgnore = false;
+        float g_nextAiIgnore = 0.0f;
+        std::vector<StringId64> g_aiIgnored;              // enemies this switched off, to switch back on
 
-        void StartMeleeTestLevel()
+        bool IsFollower(StringId64 npc)
         {
-            g_testLevel = TestLevelLoad{};
-            LoadedLevels(g_testLevel.before);
-            g_testLevel.active = true;
-            g_testLevel.startedAt = g_clock;
-            TO1_LOG("[testmap] F2: load-level \"%s\" (%zu levels loaded now)\n", kMeleeTestLevel, g_testLevel.before.size());
-            Flash("F2: loading the dev melee test map...");
-            MEMORY::LOAD_LEVEL(kMeleeTestLevel);
+            const uintptr_t p = static_cast<uintptr_t>(DcManager::LookupObject(npc));
+            return p && coop::enemies::IsFollowerPtr(p);
         }
 
-        void TickMeleeTestLevel()
+        void SetAiIgnore(bool on)
         {
-            TestLevelLoad& t = g_testLevel;
-            if (!t.active || g_clock < t.nextCheck) return;
-            t.nextCheck = g_clock + 0.5f;
-            if (!t.level) {
-                std::vector<uintptr_t> now;
-                LoadedLevels(now);
-                for (uintptr_t l : now)
-                    if (std::find(t.before.begin(), t.before.end(), l) == t.before.end()) { t.level = l; break; }
-                if (!t.level) {
-                    if (g_clock - t.startedAt > 30.0f) {
-                        t.active = false;
-                        TO1_LOG("[testmap] no new level after 30 s -- the engine did not load \"%s\"\n", kMeleeTestLevel);
-                        Flash("F2: the test map did not load (see the log)");
+            g_aiIgnore = on;
+            g_nextAiIgnore = 0.0f;
+            if (!on) {
+                int n = 0;
+                for (StringId64 npc : g_aiIgnored)
+                    if (ENTITY::DOES_EXIST(npc) && !IsFollower(npc)) {
+                        DC::Call<"npc-set-blind">(npc, 0ull);
+                        DC::Call<"npc-set-deaf">(npc, 0ull);
+                        ++n;
                     }
-                    return;
-                }
-                t.foundAt = g_clock;
-                TO1_LOG("[testmap] new level %p appeared after %.1f s\n", reinterpret_cast<void*>(t.level), g_clock - t.startedAt);
-                return;
+                g_aiIgnored.clear();
+                TO1_LOG("[test] F2: enemies can see and hear you again (%d restored)\n", n);
+                Flash("F2: enemies can see you again");
             }
-            if (g_clock - t.foundAt < 3.0f) return;        // let its spawners settle
-            t.active = false;
+            else {
+                TO1_LOG("[test] F2: enemies ignore you (blind + deaf)\n");
+                Flash("F2: enemies ignore you (F2 again to undo)");
+            }
+        }
 
-            std::vector<uintptr_t> sps;
-            LevelSpawners(t.level, sps);
-            TO1_LOG("[testmap] %zu spawners in the new level:\n", sps.size());
-            StringId64 start = 0, first = 0;
-            std::vector<StringId64> npcs;
-            for (uintptr_t sp : sps) {
-                const StringId64 sid = SpawnerSid(sp);
-                if (!sid) continue;
-                const std::string name = SpawnerName(sp);
-                const StringId64 type = SpawnerProcessType(sp);
-                const Vector3 p = LOCATOR::GET_LOCATOR_POSITION(LOCATOR::GET_SPAWNER_LOCATOR(sid));
-                TO1_LOG("[testmap]   %016llX \"%s\" type %016llX art \"%s\" at %.1f %.1f %.1f\n",
-                    static_cast<unsigned long long>(sid), name.c_str(), static_cast<unsigned long long>(type),
-                    SpawnerArtGroup(sp).c_str(), p.x, p.y, p.z);
-                if (!first) first = sid;
-                if (!start && (name.find("player") != std::string::npos || name.rfind("cp-", 0) == 0 || name.find("start") != std::string::npos))
-                    start = sid;
-                if (type == 0x99ABC3A158822080ull || name.rfind("npc-", 0) == 0) npcs.push_back(sid);
+        void TickAiIgnore()
+        {
+            if (!g_aiIgnore || g_clock < g_nextAiIgnore) return;
+            g_nextAiIgnore = g_clock + 1.0f;
+            if (!ENTITY::DOES_EXIST(SID("player"))) return;
+            for (StringId64 npc : FEDRA::GET_ALL_ENEMIES()) {
+                if (!npc || !ENTITY::DOES_EXIST(npc) || IsFollower(npc)) continue;
+                DC::Call<"npc-set-blind">(npc, 1ull);
+                DC::Call<"npc-set-deaf">(npc, 1ull);
+                if (std::find(g_aiIgnored.begin(), g_aiIgnored.end(), npc) == g_aiIgnored.end()) g_aiIgnored.push_back(npc);
             }
-            const StringId64 dest = start ? start : first;
-            if (!dest) {
-                TO1_LOG("[testmap] no spawner to stand at -- not moving the player\n");
-                Flash("F2: test map loaded, but it has no spawners (see the log)");
-                return;
+        }
+
+        // ---------------------------------------------------------------- boot_task (testing)
+        // boot_task=<node>/<task> in tlou2-coop.ini: a few seconds after the main menu is up, the
+        // game loads that story task (task-play-debug!, the call menu joining uses). Saving is
+        // switched off for that game session so the test cannot overwrite the campaign autosave.
+        void TickBootTask()
+        {
+            static bool done = false;
+            static float menuSince = -1.0f;
+            static StringId64 lastPage = ~0ull;
+            if (done || g_cfg.bootTask.empty()) return;
+            if (ENTITY::DOES_EXIST(SID("player")) || net::session::IsRunning()) { done = true; return; }   // already playing / joining
+            // Wait for the main menu: a page on the main menu stack, steady for 3 s (logos and
+            // the title screen come and go before it).
+            const StringId64 page = MENU2::GET_TOP_PAGE_IN_STACK(MenuStack::main);
+            if (page != lastPage) {
+                lastPage = page;
+                menuSince = page ? g_clock : -1.0f;
+                const char* n = SidName(page);
+                TO1_LOG("[test] boot_task: main menu page %016llX \"%s\"\n", static_cast<unsigned long long>(page), n ? n : "?");
             }
-            const uintptr_t loc = LOCATOR::GET_SPAWNER_LOCATOR(dest);
-            TeleportPlayer(LOCATOR::GET_LOCATOR_POSITION(loc), LOCATOR::GET_LOCATOR_ROTATION(loc));
-            TO1_LOG("[testmap] player moved to %016llX (%s)\n", static_cast<unsigned long long>(dest), start ? "player start" : "first spawner");
-            for (StringId64 n : npcs) {
-                const uintptr_t nl = LOCATOR::GET_SPAWNER_LOCATOR(n);
-                const StringId64 npc = ENTITY::SPAWN_ENTITY(n, LOCATOR::GET_LOCATOR_POSITION(nl), LOCATOR::GET_LOCATOR_ROTATION(nl), 0);
-                TO1_LOG("[testmap] spawn %016llX -> %016llX\n", static_cast<unsigned long long>(n), static_cast<unsigned long long>(npc));
-            }
-            Flash("F2: you are in the dev melee test map");
+            if (menuSince < 0.0f || g_clock - menuSince < 3.0f) return;
+            done = true;
+            g_testBlockSaves = true;
+            TO1_LOG("[test] boot_task: loading %s / %s (saving off for this session)\n", g_cfg.bootNode.c_str(), g_cfg.bootTask.c_str());
+            Flash("Test boot: loading the test area (saving off)");
+            DEBUG::PLAY_TASK(ToStringId64(g_cfg.bootNode.c_str()), ToStringId64(g_cfg.bootTask.c_str()), 0);
         }
 
         // Runs the discovery probe once per level, a few seconds after the player appears, so a
@@ -1508,7 +1505,7 @@ namespace coop {
                     StartSession(Want::Host);
             }
             if (Pressed(VK_F8)) StartSession(Want::Join);
-            if (Pressed(VK_F2) && ENTITY::DOES_EXIST(SID("player"))) StartMeleeTestLevel();   // dev melee test map
+            if (Pressed(VK_F2)) SetAiIgnore(!g_aiIgnore);   // testing: enemies ignore you
             if (Pressed(VK_F6)) {
                 // Shift+F6 (solo test): the nearest enemy takes a "partner melee hit" from the F10
                 // test Ellie, through the path a real partner's melee hit takes.
@@ -1567,7 +1564,8 @@ namespace coop {
 
         AutoProbe();
         LogWhereWeAre();
-        TickMeleeTestLevel();
+        TickAiIgnore();
+        TickBootTask();
         TickMoveSweep();
         LobbyTick();
         coop::world::Tick(TIME::GET_DELTA_TIME());
