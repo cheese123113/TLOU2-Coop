@@ -565,12 +565,13 @@ namespace coop::enemies {
         //   1 melee with the move + weapon class, no pointers, no flag bytes
         //   2 the same with the melee flag bytes
         //   3 the old-layout bullet (reference: lands, looks like a gunshot)
-        // The move / weapon come from the last real melee hit you landed (else a hammer swing).
+        // The move / weapon: an ordinary 1h-blunt light swing with a hammer (from a real hit).
         static int press = 0;
         const int variant = press++ % 3 + 1;
         uint64_t mWeapon = 0, mMove = 0; uint32_t mClass = 0;
-        net::hooks::LastLocalMelee(mWeapon, mClass, mMove);
-        if (!mMove) { mWeapon = SID("hammer-scar"); mClass = 0xD; mMove = SID("ellie-1h-blunt-light-1-far"); }
+        // Always a known ordinary swing from the friend's log: a finisher / synced move of our
+        // own (recorded by the melee probe) replayed on another enemy crashed the game.
+        mWeapon = SID("hammer-scar"); mClass = 0xD; mMove = SID("ellie-1h-blunt-light-1-far");
         uint64_t weapon = net::engine::GetPlayerWeaponId(player);
         if (!weapon) weapon = SID("pistol-beretta");
         const float before = ENTITY::GET_HEALTH(best);

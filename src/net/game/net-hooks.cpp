@@ -1354,7 +1354,12 @@ namespace net::hooks {
             __try {
                 const uint32_t kind = *reinterpret_cast<const uint32_t*>(ai + 0x18);
                 const uintptr_t local = NetPlayers::LocalPtr();
-                if (kind == 1 && local && AttackerFromAttackInfo(ai) == local && *reinterpret_cast<const uint64_t*>(ai + 0x968)) {
+                // Remember only ordinary hits: finishers / disarms / synced kills are paired
+                // animations (replaying one on another enemy crashed the game) and carry huge
+                // damage (15000 seen); a normal swing does 10-50.
+                const float dmgSeen = *reinterpret_cast<const float*>(ai + 0x40);
+                if (kind == 1 && local && AttackerFromAttackInfo(ai) == local && *reinterpret_cast<const uint64_t*>(ai + 0x968)
+                    && dmgSeen > 0.0f && dmgSeen <= 100.0f) {
                     g_lastMeleeWeapon.store(*reinterpret_cast<const uint64_t*>(ai + 0x20));
                     g_lastMeleeClass.store(*reinterpret_cast<const uint32_t*>(ai + 0x1C));
                     g_lastMeleeMove.store(*reinterpret_cast<const uint64_t*>(ai + 0x968));
